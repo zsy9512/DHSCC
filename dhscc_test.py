@@ -466,11 +466,21 @@ def prepare_model_for_testing(model):
     model.eval()
     
     if hasattr(model, 'adaptive_group_selector') and model.adaptive_group_selector is not None:
+        print("🔧 Found adaptive group selector, preparing for testing...")
+        
         # 检查是否已经完成最终化
-        if not hasattr(model.adaptive_group_selector, '_finalized') or not model.adaptive_group_selector._finalized:
+        is_finalized = hasattr(model.adaptive_group_selector, '_finalized') and model.adaptive_group_selector._finalized
+        
+        if not is_finalized:
             print("⚠️  Adaptive selector not finalized, applying monotonicity constraints...")
             model.adaptive_group_selector.finalize_training()
             model.adaptive_group_selector._finalized = True
+        else:
+            print("✓ Adaptive selector already finalized")
+            # 即使已经最终化，也要确保单调性约束被应用
+            print("🔧 Re-applying monotonicity constraints to ensure correctness...")
+            model.adaptive_group_selector._enforce_monotonicity()
+            model.adaptive_group_selector._validate_group_choices()
         
         # 设置为推理模式
         model.adaptive_group_selector.set_inference_mode(True)
@@ -485,9 +495,15 @@ def prepare_model_for_testing(model):
         if is_monotonic:
             print("✓ Adaptive selector strategy is monotonic")
         else:
-            print("⚠️  Strategy not monotonic, enforcing constraints...")
+            print("⚠️  Strategy still not monotonic, enforcing constraints again...")
             model.adaptive_group_selector._enforce_monotonicity()
             model.adaptive_group_selector._validate_group_choices()
+            
+            # 再次检查
+            strategy = model.adaptive_group_selector.get_strategy_summary()
+            groups = [g for _, g in strategy]
+            is_monotonic = all(groups[i] <= groups[i+1] for i in range(len(groups)-1))
+            print(f"✓ Monotonicity check after re-enforcement: {is_monotonic}")
         
         print("✓ Adaptive selector prepared for testing")
         

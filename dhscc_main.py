@@ -330,6 +330,17 @@ def main():
             if 'adaptive_selector_state' in checkpoint and hasattr(model, 'load_adaptive_selector_state'):
                 model.load_adaptive_selector_state(checkpoint['adaptive_selector_state'])
                 print("Adaptive selector state loaded successfully!")
+                
+                # Debug: Check if the selector is properly finalized
+                if hasattr(model, 'adaptive_group_selector') and model.adaptive_group_selector is not None:
+                    is_finalized = hasattr(model.adaptive_group_selector, '_finalized') and model.adaptive_group_selector._finalized
+                    print(f"Adaptive selector finalized status: {is_finalized}")
+                    if is_finalized:
+                        print("✓ Adaptive selector was properly finalized during training")
+                    else:
+                        print("⚠️  Adaptive selector was not finalized, will be finalized during testing preparation")
+            else:
+                print("No adaptive selector state found in checkpoint")
             
             # Run comprehensive test
             ensure_dir(args.results_dir)
@@ -350,6 +361,17 @@ def main():
         if 'adaptive_selector_state' in checkpoint and hasattr(model, 'load_adaptive_selector_state'):
             model.load_adaptive_selector_state(checkpoint['adaptive_selector_state'])
             print("Adaptive selector state loaded successfully!")
+            
+            # Debug: Check if the selector is properly finalized
+            if hasattr(model, 'adaptive_group_selector') and model.adaptive_group_selector is not None:
+                is_finalized = hasattr(model.adaptive_group_selector, '_finalized') and model.adaptive_group_selector._finalized
+                print(f"Adaptive selector finalized status: {is_finalized}")
+                if is_finalized:
+                    print("✓ Adaptive selector was properly finalized during training")
+                else:
+                    print("⚠️  Adaptive selector was not finalized, will be finalized during testing preparation")
+        else:
+            print("No adaptive selector state found in checkpoint")
         
         print("Model loaded successfully!")
         
