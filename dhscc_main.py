@@ -123,6 +123,8 @@ def create_argument_parser():
     parser.add_argument('--selector_algorithm', type=str, default='heuristic', 
                         choices=['heuristic', 'rl'],
                         help='Adaptive group selector algorithm')
+    parser.add_argument('--fixed_group', type=int, default=None,
+                        help='Fixed number of groups to use (default: None for adaptive selection)')
 
     # ==================== 无线信道模型参数 ====================
     parser.add_argument('--channel_model', type=str, default='awgn',
@@ -163,7 +165,7 @@ def create_argument_parser():
     # Test parameter will be set automatically based on --mode argument
     
     # ==================== 重要性阈值参数 ====================
-    parser.add_argument('--threshold', type=float, default=0.5,
+    parser.add_argument('--threshold', type=float, default=0.0,
                         help='Importance threshold for feature selection')
     
     # ==================== 输出目录参数 ====================
@@ -175,7 +177,7 @@ def create_argument_parser():
                         help='Directory for saving training checkpoints')
     parser.add_argument('--results_dir', type=str, default='./results',
                         help='Directory for saving test results')
-    parser.add_argument('--seed', type=int, default=42, 
+    parser.add_argument('--seed', type=int, default=127, 
                         help='Random seed for reproducibility')
 
     return parser

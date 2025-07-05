@@ -43,7 +43,7 @@ class AdaptiveGroupSelector:
         self.update_count: Dict[Tuple[int, int], int] = {}
         
         # 算法参数
-        self.accuracy_threshold = 0.005  # 1%的精度阈值，放宽一些
+        self.accuracy_threshold = 0.005  # 5%的精度阈值，放宽一些
         self.min_samples = 8  # 减少最少样本数，加快学习速度
         self.exploration_prob = 0.3  # 探索概率
         
@@ -314,15 +314,6 @@ class AdaptiveGroupSelector:
             inference_mode: True表示推理模式，False表示训练模式
         """
         self.inference_mode = inference_mode
-        if inference_mode:
-            print("Adaptive Group Selector: Switched to INFERENCE MODE")
-            print("  - No more exploration or strategy updates")
-            print("  - Using fixed learned strategy")
-            print("  - Optimal for Final Training phase")
-        else:
-            print("Adaptive Group Selector: Switched to TRAINING MODE")
-            print("  - Exploration and strategy updates enabled")
-    
     def is_inference_mode(self) -> bool:
         """
         检查是否处于推理模式

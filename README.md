@@ -32,12 +32,16 @@ python dhscc_main.py --mode train --epochs 300 --communication_mode 4
 python dhscc_main.py --mode train \
     --epochs 200 \
     --pretrain_epochs 80 \
-    --selector_epochs 120 \
-    --final_epochs 80 \
+    --selector_epochs 150 \
     --communication_mode 4 \
     --snr 3.0
 ```
-
+python dhscc_main.py --mode train \
+    --epochs 20 \
+    --pretrain_epochs 10 \
+    --selector_epochs 15 \
+    --communication_mode 4 \
+    --snr 3.0
 #### 高级训练配置
 ```bash
 # 使用不同信道模型和编码参数

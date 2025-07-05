@@ -466,11 +466,11 @@ def main():
         print(f"GPU内存: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
     
     # 创建测试器
-    test_snr = 3.0  # 中等信噪比
-    tester = GroupAdaptiveTransmissionTester(batch_size=4, device=device, test_snr=test_snr)
+    test_snr = 1.0  # 中等信噪比
+    tester = GroupAdaptiveTransmissionTester(batch_size=256, device=device, test_snr=test_snr)
     
     # 测试group_to_use范围: 2-8
-    group_range = list(range(2, 9))  # [2, 3, 4, 5, 6, 7, 8]
+    group_range = list(range(0, 5))  # [2, 3, 4, 5, 6, 7, 8]
     print(f"测试group_to_use范围: {group_range}")
     
     # 运行综合测试

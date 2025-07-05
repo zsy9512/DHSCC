@@ -121,7 +121,6 @@ def test_single_config(model, test_loader, device, comm_mode, snr, args):
         # 设置模型为推理模式，关闭探索
         if hasattr(model, 'set_inference_mode'):
             model.set_inference_mode(True)
-        
         for data, target in pbar:
             data, target = data.to(device), target.to(device)
             
@@ -196,11 +195,6 @@ def test_single_config(model, test_loader, device, comm_mode, snr, args):
         result['original_features'] = torch.cat(original_features_batch, dim=0).cpu().numpy()
     if attn_weights_batch:
         result['attn_weights'] = torch.cat(attn_weights_batch, dim=0).cpu().numpy()
-    
-    # 恢复训练模式
-    if hasattr(model, 'set_inference_mode'):
-        model.set_inference_mode(False)
-    
     return result
 
 

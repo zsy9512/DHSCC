@@ -753,7 +753,6 @@ class Polar5GEncoder(PolarEncoder):
         # Reshape inputs to [...,k]
         batch_size = np.prod(input_shape[:-1]).astype(int) if len(input_shape) > 1 else 1
         u = bits.reshape(batch_size, self._k_target)
-
         # Convert to float for CRC encoding to avoid CUDA int64 matrix multiplication issue
         orig_dtype = u.dtype
         u_float = u.to(torch.float32)

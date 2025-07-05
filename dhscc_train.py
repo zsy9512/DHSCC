@@ -304,7 +304,12 @@ def train(model, train_loader, device, args, test_loader=None):
         # 每轮epoch后进行简单测试
         if test_loader is not None:
             from dhscc_test import test
+            test_loss_min, test_acc_min, test_group_min = test(model, test_loader, epoch, args.snr_min, device)
             test_loss, test_acc, test_group = test(model, test_loader, epoch, args.snr, device)
+            test_loss_max, test_acc_max, test_group_max = test(model, test_loader, epoch, args.snr_max, device)
+            test_loss= (test_loss_min + test_loss + test_loss_max) / 3
+            test_acc = (test_acc_min + test_acc + test_acc_max) / 3
+            test_group = (test_group_min + test_group + test_group_max) / 3
         else:
             test_loss, test_acc, test_group = 0.0, 0.0, 0.0
         
@@ -385,7 +390,8 @@ def train(model, train_loader, device, args, test_loader=None):
         
         # 保存最佳模型 (30 epoch后开始保存，每阶段只保存最优)
         if epoch >= 30 and test_loader is not None:
-            if test_acc > best_models[current_phase]['acc']:
+            if test_acc > best_models[current_phase]['acc']+0.1:  # 0.1%的精度提升才算新最佳
+                # 更新最佳模型信息
                 best_models[current_phase]['acc'] = test_acc
                 best_models[current_phase]['epoch'] = epoch + 1
                 

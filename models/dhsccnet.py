@@ -155,14 +155,22 @@ class DHSCCNet(nn.Module):
                 # Pretrain phase: use default group_to_use, disable coding
                 group_to_use = 8  # Default value
                 use_coding = False  # Disable coding in pretrain phase
+                
+                # Override with fixed group if specified
+                if hasattr(self.args, 'fixed_group') and self.args.fixed_group is not None:
+                    group_to_use = self.args.fixed_group
             else:
                 # Get adaptive group selection - 在batch级别确定group，而不是sample级别
                 # 这样确保同一个batch中所有样本使用相同的group
                 # if not hasattr(self, '_current_batch_group') or not self.training:
-                #     # 每个新batch或测试时重新计算group
+                #     # 每个新batch或测试时重新计算group          
                 self._current_batch_group = self._get_group_to_use(snr_value, epoch)
                 group_to_use = self._current_batch_group
                 use_coding = (self.comm_mode == 4)  # Restore original coding setting
+            
+            # Override with fixed group if specified
+            if hasattr(self.args, 'fixed_group') and self.args.fixed_group is not None:
+                group_to_use = self.args.fixed_group
             
             # Track performance data during training
             if self.training:
@@ -170,7 +178,7 @@ class DHSCCNet(nn.Module):
                 self.batch_groups.append(int(group_to_use))  # 确保存储为整数
         
         # === WIRELESS TRANSMISSION ===
-        received_features, ber, transmit_mse, zeros_count = self.wireless_channel(
+        received_features, ber, transmit_mse, sent_features = self.wireless_channel(
             features=encoded_features,
             channel_noise=channel_noise,
             psnr_value=snr_value,  # Use correct parameter name
@@ -187,16 +195,6 @@ class DHSCCNet(nn.Module):
         classification_output = self.receiver_network(
             received_features, channel_noise, feature_shape
         )
-        
-        # Determine sent_features based on communication mode
-        if self.comm_mode == 1:
-            # Mode 1: sent features are the encoded features
-            sent_features = encoded_features
-        elif self.comm_mode in [2, 3, 4]:
-            # Modes 2,3,4: sent features are quantized features
-            sent_features = quantized_features if quantized_features is not None else encoded_features
-        else:
-            sent_features = encoded_features
         
         # Prepare debug information
         debug_info = {

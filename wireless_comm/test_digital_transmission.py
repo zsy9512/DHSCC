@@ -249,7 +249,7 @@ class DigitalTransmissionTester:
         transmission_time = time.time() - start_time
         
         print(f"2. 极化编码传输完成: 耗时 {transmission_time:.4f}s")
-        print(f"   - BER: {result['bit_error_rate']:.6f}")
+        print(f"   - BER: {result['bit_error_rate']:.8f}")
         print(f"   - 索引误差率: {result['index_error_rate']:.6f}")
         
         # 3. 获取中间结果
@@ -456,13 +456,13 @@ def main():
         print(f"GPU内存: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
     
     # 创建测试器
-    tester = DigitalTransmissionTester(batch_size=4, device=device)
+    tester = DigitalTransmissionTester(batch_size=1024, device=device)
     
     # 1. 基础转换测试
     print("\n" + "="*50)
     print("第一步: 测试索引-二进制转换")
     print("="*50)
-    binary_data, reconstructed_indices = tester.test_indices_binary_conversion()
+    #binary_data, reconstructed_indices = tester.test_indices_binary_conversion()
     
     # 2. SNR扫描测试
     print("="*50)
@@ -470,7 +470,7 @@ def main():
     print("="*50)
     
     # SNR范围: 0-5dB, 6个点 (适合4QAM测试)
-    snr_range = np.linspace(0, 5, 6).tolist()
+    snr_range = np.linspace(0, 5, 11).tolist()
     print(f"SNR测试点: {snr_range}")
     
     # 运行完整测试

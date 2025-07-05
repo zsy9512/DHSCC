@@ -120,7 +120,7 @@ class WirelessChannelModule(nn.Module):
         # Calculate transmission MSE
         transmit_mse = F.mse_loss(received_features, sent_features, reduction='mean')
         
-        return received_features, torch.tensor(0.0).to(device), transmit_mse, zeros_count
+        return received_features, torch.tensor(0.0).to(device), transmit_mse, sent_features
     
     def _mode2_quantized_analog(self, quantized_features, channel_noise):
         """
@@ -142,7 +142,7 @@ class WirelessChannelModule(nn.Module):
         # Calculate transmission MSE
         transmit_mse = F.mse_loss(received_features, quantized_features, reduction='mean')
         
-        return received_features, torch.tensor(0.0).to(device), transmit_mse, 0
+        return received_features, torch.tensor(0.0).to(device), transmit_mse, quantized_features
     
     def _mode3_digital_no_coding(self, quantized_features, indices, psnr_value, group_to_use, decode_fn):
         """
@@ -204,7 +204,7 @@ class WirelessChannelModule(nn.Module):
         
         transmit_mse = F.mse_loss(transmitted_features_received, transmitted_features_sent, reduction='mean')
         
-        return received_features, ber, transmit_mse, 0
+        return received_features, ber, transmit_mse, sent_features
     
     def _mode4_digital_with_coding(self, quantized_features, indices, psnr_value, group_to_use, decode_fn, use_coding=True):
         """
@@ -271,7 +271,7 @@ class WirelessChannelModule(nn.Module):
         
         transmit_mse = F.mse_loss(transmitted_features_received, transmitted_features_sent, reduction='mean')
         
-        return received_features, ber, transmit_mse, 0
+        return received_features, ber, transmit_mse, sent_features
     
     def _get_importance_mask(self, importance_weights, threshold=None):
         """
