@@ -52,7 +52,7 @@ def create_argument_parser():
     parser.add_argument('--lr_gamma', type=float, default=0.5, help='Learning rate decay factor')
 
     # ==================== 三阶段训练参数 ====================
-    parser.add_argument('--pretrain_epochs', type=int, default=100,
+    parser.add_argument('--pretrain_epochs', type=int, default=120,
                         help='Number of epochs for pretraining phase')
     parser.add_argument('--selector_epochs', type=int, default=100, 
                         help='Number of epochs for adaptive selector training phase')
@@ -71,7 +71,6 @@ def create_argument_parser():
     # ==================== 通信模式配置 ====================
     parser.add_argument('--communication_mode', type=int, default=4, choices=[0, 1, 2, 3, 4],
                         help='Communication mode: '
-                             '0: No wireless channel (baseline), '
                              '1: Analog transmission (direct Gaussian noise), '
                              '2: Analog transmission with vector quantization, '
                              '3: Digital transmission without channel coding, '
@@ -118,7 +117,7 @@ def create_argument_parser():
                         help='Demapping method for soft decisions')
 
     # ==================== 自适应组选择器参数 (Modes 3,4) ====================
-    parser.add_argument('--selector_snr_bins', type=int, default=11,
+    parser.add_argument('--selector_snr_bins', type=int, default=21,
                         help='Number of SNR bins for adaptive group selector')
     parser.add_argument('--selector_algorithm', type=str, default='heuristic', 
                         choices=['heuristic', 'rl'],
@@ -127,7 +126,7 @@ def create_argument_parser():
                         help='Fixed number of groups to use (default: None for adaptive selection)')
 
     # ==================== 无线信道模型参数 ====================
-    parser.add_argument('--channel_model', type=str, default='awgn',
+    parser.add_argument('--channel_model', type=str, default='rayleigh',
                         choices=['awgn', 'rayleigh', 'udp'],
                         help='Wireless channel model: awgn, rayleigh, or udp')
     parser.add_argument('--equalization_method', type=str, default='zf',
@@ -177,7 +176,7 @@ def create_argument_parser():
                         help='Directory for saving training checkpoints')
     parser.add_argument('--results_dir', type=str, default='./results',
                         help='Directory for saving test results')
-    parser.add_argument('--seed', type=int, default=127, 
+    parser.add_argument('--seed', type=int, default=123, 
                         help='Random seed for reproducibility')
 
     return parser

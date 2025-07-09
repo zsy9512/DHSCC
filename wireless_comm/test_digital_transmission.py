@@ -48,17 +48,22 @@ from wireless_comm.config import get_config_by_scenario
 class DigitalTransmissionTester:
     """数字传输测试器"""
     
-    def __init__(self, batch_size: int = 4, device: str = "cuda"):
+    def __init__(self, batch_size: int = 4, device: str = "cuda", 
+                 channel_model: str = "rayleigh", equalization_method: str = "zf"):
         """
         初始化测试器
         
         Args:
             batch_size: 批量大小
             device: 计算设备
+            channel_model: 信道模型 ('awgn', 'rayleigh', 'udp')
+            equalization_method: 均衡方法 ('identity', 'zf', 'mrc', 'mmse')
         """
         self.batch_size = batch_size
         self.device = device
-        self.group_to_use = 8
+        self.channel_model = channel_model
+        self.equalization_method = equalization_method
+        self.group_to_use = 2
         self.group_size = 4
         self.bits_per_index = 4
         self.total_bits = self.group_to_use * self.group_size * self.bits_per_index  # 128 bits
@@ -66,6 +71,8 @@ class DigitalTransmissionTester:
         print(f"=== 数字传输测试器初始化 ===")
         print(f"批量大小: {batch_size}")
         print(f"设备: {device}")
+        print(f"信道模型: {channel_model}")
+        print(f"均衡方法: {equalization_method}")
         print(f"索引形状: [{batch_size}, {self.group_to_use}, {self.group_size}]")
         print(f"总比特数: {self.total_bits}")
         print()
@@ -96,26 +103,28 @@ class DigitalTransmissionTester:
         # 模式3: 无编码数字传输
         self.interface_mode3 = WirelessInterface(
             comm_mode=3,
-            channel_model='awgn',
+            channel_model=self.channel_model,
+            equalization_method=self.equalization_method,
             constellation_type='qam',  # 4QAM调制
             bits_per_symbol=2,
             device=self.device
         )
-        print(f"模式3接口创建成功: 无编码数字传输, 4QAM调制")
+        print(f"模式3接口创建成功: 无编码数字传输, 4QAM调制, {self.channel_model}信道, {self.equalization_method}均衡")
         
         # 模式4: 编码数字传输（极化码）
         self.interface_mode4 = WirelessInterface(
             comm_mode=4,
             k=128,  # 信息位数（等于总比特数）
             n=256,  # 码长
-            channel_model='awgn',
+            channel_model=self.channel_model,
+            equalization_method=self.equalization_method,
             constellation_type='qam',  # 4QAM调制
             bits_per_symbol=2,
             decoder_type='SC',
             list_size=8,
             device=self.device
         )
-        print(f"模式4接口创建成功: 极化码 k={self.interface_mode4.k}, n={self.interface_mode4.n}, 4QAM调制")
+        print(f"模式4接口创建成功: 极化码 k={self.interface_mode4.k}, n={self.interface_mode4.n}, 4QAM调制, {self.channel_model}信道, {self.equalization_method}均衡")
         print()
         
     def test_indices_binary_conversion(self):
@@ -265,6 +274,8 @@ class DigitalTransmissionTester:
         error_indices = index_errors.sum().item()
         
         print(f"4. 极化码性能:")
+        print(f"   - 信道模型: {self.channel_model}")
+        print(f"   - 均衡方法: {self.equalization_method}")
         print(f"   - 码率: {self.interface_mode4.k}/{self.interface_mode4.n} = {self.interface_mode4.k/self.interface_mode4.n:.3f}")
         print(f"   - 总索引数: {total_indices}")
         print(f"   - 错误索引数: {error_indices}")
@@ -338,6 +349,7 @@ class DigitalTransmissionTester:
         """分析和可视化测试结果"""
         print("\n" + "=" * 60)
         print("测试结果分析")
+        print(f"信道模型: {self.channel_model.upper()}, 均衡方法: {self.equalization_method.upper()}")
         print("=" * 60)
         
         snr_range = results['snr_range']
@@ -391,7 +403,7 @@ class DigitalTransmissionTester:
         ax1.semilogy(snr_range, mode4_bers, 'r-s', label='Mode 4 (Polar Code)', linewidth=2, markersize=6)
         ax1.set_xlabel('SNR (dB)')
         ax1.set_ylabel('Bit Error Rate (BER)')
-        ax1.set_title('BER Performance Comparison')
+        ax1.set_title(f'BER Performance ({self.channel_model.upper()} + {self.equalization_method.upper()})')
         ax1.grid(True, alpha=0.3)
         ax1.legend()
         
@@ -400,7 +412,7 @@ class DigitalTransmissionTester:
         ax2.semilogy(snr_range, mode4_index_errors, 'r-s', label='Mode 4 (Polar Code)', linewidth=2, markersize=6)
         ax2.set_xlabel('SNR (dB)')
         ax2.set_ylabel('Index Error Rate (IER)')
-        ax2.set_title('Index Error Rate Comparison')
+        ax2.set_title(f'Index Error Rate ({self.channel_model.upper()} + {self.equalization_method.upper()})')
         ax2.grid(True, alpha=0.3)
         ax2.legend()
         
@@ -409,7 +421,7 @@ class DigitalTransmissionTester:
         ax3.plot(snr_range, ber_improvements, 'g-^', linewidth=2, markersize=6)
         ax3.set_xlabel('SNR (dB)')
         ax3.set_ylabel('BER Improvement Factor')
-        ax3.set_title('Polar Code BER Improvement')
+        ax3.set_title(f'Polar Code BER Improvement ({self.channel_model.upper()})')
         ax3.grid(True, alpha=0.3)
         ax3.set_yscale('log')
         
@@ -436,15 +448,41 @@ class DigitalTransmissionTester:
         import os
         os.makedirs('/home/zsy/workplace/DHSCC/results', exist_ok=True)
         
-        plt.savefig('/home/zsy/workplace/DHSCC/results/test_results.png', dpi=300, bbox_inches='tight')
+        # 生成包含信道和均衡信息的文件名
+        filename = f'test_results_{self.channel_model}_{self.equalization_method}.png'
+        filepath = f'/home/zsy/workplace/DHSCC/results/{filename}'
+        
+        plt.savefig(filepath, dpi=300, bbox_inches='tight')
         plt.show()
-        print("\nFigure saved to: /home/zsy/workplace/DHSCC/results/test_results.png")
+        print(f"\nFigure saved to: {filepath}")
 
 
 def main():
     """主测试函数"""
+    import argparse
+    
+    # 添加命令行参数解析
+    parser = argparse.ArgumentParser(description='数字传输系统完整测试')
+    parser.add_argument('--channel_model', type=str, default='rayleigh',
+                        choices=['awgn', 'rayleigh', 'udp'],
+                        help='信道模型 (默认: rayleigh)')
+    parser.add_argument('--equalization_method', type=str, default='zf',
+                        choices=['identity', 'zf', 'mrc', 'mmse'],
+                        help='均衡方法 (默认: zf)')
+    parser.add_argument('--batch_size', type=int, default=1024,
+                        help='批量大小 (默认: 1024)')
+    parser.add_argument('--snr_min', type=float, default=0,
+                        help='最小SNR (默认: 0 dB)')
+    parser.add_argument('--snr_max', type=float, default=10,
+                        help='最大SNR (默认: 10 dB)')
+    parser.add_argument('--snr_points', type=int, default=11,
+                        help='SNR测试点数 (默认: 11)')
+    
+    args = parser.parse_args()
+    
     print("=" * 80)
     print("                  数字传输系统完整测试")
+    print(f"信道模型: {args.channel_model.upper()}, 均衡方法: {args.equalization_method.upper()}")
     print("=" * 80)
     
     # 检查CUDA可用性
@@ -456,7 +494,12 @@ def main():
         print(f"GPU内存: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
     
     # 创建测试器
-    tester = DigitalTransmissionTester(batch_size=1024, device=device)
+    tester = DigitalTransmissionTester(
+        batch_size=args.batch_size, 
+        device=device,
+        channel_model=args.channel_model,
+        equalization_method=args.equalization_method
+    )
     
     # 1. 基础转换测试
     print("\n" + "="*50)
@@ -469,9 +512,10 @@ def main():
     print("第二步: SNR扫描测试")
     print("="*50)
     
-    # SNR范围: 0-5dB, 6个点 (适合4QAM测试)
-    snr_range = np.linspace(0, 5, 11).tolist()
+    # 根据命令行参数设置SNR范围
+    snr_range = np.linspace(args.snr_min, args.snr_max, args.snr_points).tolist()
     print(f"SNR测试点: {snr_range}")
+    print(f"信道配置: {args.channel_model} + {args.equalization_method}")
     
     # 运行完整测试
     results = tester.run_snr_sweep_test(snr_range)
@@ -490,7 +534,9 @@ def main():
     import os
     os.makedirs('/home/zsy/workplace/DHSCC/results', exist_ok=True)
     
-    results_file = "/home/zsy/workplace/DHSCC/results/test_results.pkl"
+    # 生成包含信道和均衡信息的文件名
+    results_filename = f"test_results_{args.channel_model}_{args.equalization_method}.pkl"
+    results_file = f"/home/zsy/workplace/DHSCC/results/{results_filename}"
     import pickle
     with open(results_file, 'wb') as f:
         pickle.dump(results, f)

@@ -158,31 +158,36 @@ class WirelessReceiver(nn.Module):
             return received_symbols, noise_var
         
         elif self.equalization_method.lower() == "zf":
-            # Zero-Forcing equalization
+            # Zero-Forcing equalization: y_eq = y / h
             h_magnitude = torch.abs(h)
             h_safe = torch.where(h_magnitude < 1e-8, 
                                torch.sgn(h) * 1e-8, h)
             equalized_symbols = received_symbols / h_safe
             
-            # ZF amplifies noise by |h|^(-2)
+            # ZF amplifies noise by |h|^(-2) for each symbol
             h_magnitude_squared = torch.abs(h)**2
             h_mag_sq_safe = torch.where(h_magnitude_squared < 1e-8, 
                                        1e-8, h_magnitude_squared)
-            adjusted_noise_var = noise_var / h_mag_sq_safe.mean().item()
+            # Use harmonic mean of noise amplification factors
+            adjusted_noise_var = noise_var * torch.mean(1.0 / h_mag_sq_safe).item()
+            
+            return equalized_symbols, adjusted_noise_var
         
         elif self.equalization_method.lower() == "mrc":
-            # Maximum Ratio Combining
+            # Maximum Ratio Combining: y_eq = h* * y / |h|^2
             h_conj = torch.conj(h)
             h_magnitude_squared = torch.abs(h)**2
             h_mag_sq_safe = torch.where(h_magnitude_squared < 1e-8, 
                                        1e-8, h_magnitude_squared)
-            equalized_symbols = (h_conj * received_symbols) / h_mag_sq_safe
+            equalized_symbols = (h_conj * received_symbols) / h_magnitude_squared
             
-            # MRC provides diversity gain
+            # MRC provides diversity gain - use average channel gain
             adjusted_noise_var = noise_var / h_magnitude_squared.mean().item()
-        
+            
+            return equalized_symbols, adjusted_noise_var
+    
         elif self.equalization_method.lower() == "mmse":
-            # MMSE equalization
+            # MMSE equalization: y_eq = h* * y / (|h|^2 + sigma^2)
             h_conj = torch.conj(h)
             h_magnitude_squared = torch.abs(h)**2
             denominator = h_magnitude_squared + noise_var
@@ -190,11 +195,11 @@ class WirelessReceiver(nn.Module):
             
             # For MMSE, use original noise variance
             adjusted_noise_var = noise_var
+            
+            return equalized_symbols, adjusted_noise_var
         
         else:
             raise ValueError(f"Unknown equalization method: {self.equalization_method}")
-        
-        return equalized_symbols, adjusted_noise_var
     
     def demodulate(self, 
                   received_symbols: torch.Tensor, 

@@ -442,6 +442,7 @@ class WirelessInterface:
                 for sys in self.adaptive_systems:
                     if sys.k == current_bits:
                         selected_system = sys
+                        #print(f"Using adaptive polar code system with k={sys.k} for {current_bits} bits")
                         break
                 
                 if selected_system is not None:
