@@ -310,11 +310,11 @@ class ReceiverNetwork(nn.Module):
         batch_size = received_features.size(0)
         
         # Adaptive decoding with noise conditioning
-        decoded_flat = self.adaptive_decoder(received_features, channel_noise)
-        
+        #decoded_flat = self.adaptive_decoder(received_features, channel_noise)这个trick没用
+        decoded_flat=received_features
         # Reshape for convolutional processing
         decoded_reshaped = decoded_flat.view(batch_size, 8, 16)
-        
+        #print(received_features.shape,decoded_reshaped.shape,decoded_flat.shape)
         # Reconstruct high-dimensional features
         reconstructed_features = self.feature_reconstructor(decoded_reshaped, target_shape)
         

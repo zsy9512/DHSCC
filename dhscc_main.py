@@ -54,9 +54,9 @@ def create_argument_parser():
     # ==================== 三阶段训练参数 ====================
     parser.add_argument('--pretrain_epochs', type=int, default=120,
                         help='Number of epochs for pretraining phase')
-    parser.add_argument('--selector_epochs', type=int, default=100, 
+    parser.add_argument('--selector_epochs', type=int, default=200, 
                         help='Number of epochs for adaptive selector training phase')
-    parser.add_argument('--final_epochs', type=int, default=100,
+    parser.add_argument('--final_epochs', type=int, default=300,
                         help='Number of epochs for final joint training phase')
     # ==================== 信道参数 (统一使用SNR) ====================
     parser.add_argument('--snr', type=float, default=3.0, 
@@ -126,7 +126,7 @@ def create_argument_parser():
                         help='Fixed number of groups to use (default: None for adaptive selection)')
 
     # ==================== 无线信道模型参数 ====================
-    parser.add_argument('--channel_model', type=str, default='rayleigh',
+    parser.add_argument('--channel_model', type=str, default='awgn',
                         choices=['awgn', 'rayleigh', 'udp'],
                         help='Wireless channel model: awgn, rayleigh, or udp')
     parser.add_argument('--equalization_method', type=str, default='zf',

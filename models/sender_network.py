@@ -344,7 +344,7 @@ class SenderNetwork(nn.Module):
         
         # Ensure non-zero values for stability
         importance_weights = torch.clamp(final_importance*channel_noise, min=1e-4)
-        
+        #importance_weights = torch.clamp(torch.ones_like(final_importance), min=1e-4)
         # Sort features by importance
         sorted_importance, sort_indices = torch.sort(importance_weights, dim=-1, descending=True)
         
