@@ -171,8 +171,8 @@ class WirelessCommunicationSystem:
             raise ValueError("Either ebno_db or snr_db must be provided for simulated channels")
         
         # Transmitter processing
-        #if self.use_coding:
-            #bits=bits.flip(-1)  # Flip bits for UEP
+        if self.use_coding:
+            bits=bits.flip(-1)  # Flip bits for UEP
         encoded_bits, symbols = self.transmitter(bits)
         
         # Channel processing
@@ -206,7 +206,7 @@ class WirelessCommunicationSystem:
             
             if self.use_coding:
                 # For coded systems, return decoded bits and original bits
-                #decoded_bits=decoded_bits.flip(-1)
+                decoded_bits=decoded_bits.flip(-1)
                 return decoded_bits, bits
             else:
                 # For uncoded systems, return LLRs, noise_var, and channel info
