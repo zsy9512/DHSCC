@@ -196,7 +196,7 @@ class WirelessTransmitter(nn.Module):
         """
         # Move bits to device
         bits = bits.to(self.device)
-        
+
         # Channel coding
         encoded_bits = self.encode(bits)
         

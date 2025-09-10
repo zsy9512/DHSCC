@@ -45,7 +45,7 @@ def create_argument_parser():
     # ==================== 模型参数 ====================
     parser.add_argument('--intermediate_dim', type=int, default=128,
                         help='Dimension of intermediate representation (feature vector size)')
-    parser.add_argument('--epochs', type=int, default=300, help='Total number of training epochs')
+    parser.add_argument('--epochs', type=int, default=220, help='Total number of training epochs')
     parser.add_argument('--batch_size', type=int, default=128, help='Training batch size')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--lr_step', type=int, default=20, help='Learning rate decay step')
@@ -54,16 +54,16 @@ def create_argument_parser():
     # ==================== 三阶段训练参数 ====================
     parser.add_argument('--pretrain_epochs', type=int, default=120,
                         help='Number of epochs for pretraining phase')
-    parser.add_argument('--selector_epochs', type=int, default=200, 
+    parser.add_argument('--selector_epochs', type=int, default=180, 
                         help='Number of epochs for adaptive selector training phase')
-    parser.add_argument('--final_epochs', type=int, default=300,
+    parser.add_argument('--final_epochs', type=int, default=200,
                         help='Number of epochs for final joint training phase')
     # ==================== 信道参数 (统一使用SNR) ====================
-    parser.add_argument('--snr', type=float, default=3.0, 
+    parser.add_argument('--snr', type=float, default=10.0, 
                         help='Training SNR level (dB)')
-    parser.add_argument('--snr_min', type=float, default=0.0, 
+    parser.add_argument('--snr_min', type=float, default=5.0, 
                         help='Minimum SNR for range testing (dB)')
-    parser.add_argument('--snr_max', type=float, default=5.0, 
+    parser.add_argument('--snr_max', type=float, default=15.0, 
                         help='Maximum SNR for range testing (dB)')
     parser.add_argument('--test_snr_steps', type=int, default=11, 
                         help='Number of SNR steps for testing')
@@ -93,9 +93,9 @@ def create_argument_parser():
                         help='Maximum number of groups available for transmission')
     
     # 信道编码参数
-    parser.add_argument('--N', type=int, default=256,
+    parser.add_argument('--N', type=int, default=128,
                         help='Polar code length (must be power of 2)')
-    parser.add_argument('--k', type=int, default=128,
+    parser.add_argument('--K', type=int, default=96,
                         help='Information bits for polar coding')
     parser.add_argument('--channel_type', type=str, default='uplink',
                         choices=['uplink', 'downlink'],
@@ -126,10 +126,10 @@ def create_argument_parser():
                         help='Fixed number of groups to use (default: None for adaptive selection)')
 
     # ==================== 无线信道模型参数 ====================
-    parser.add_argument('--channel_model', type=str, default='awgn',
+    parser.add_argument('--channel_model', type=str, default='rayleigh',
                         choices=['awgn', 'rayleigh', 'udp'],
                         help='Wireless channel model: awgn, rayleigh, or udp')
-    parser.add_argument('--equalization_method', type=str, default='zf',
+    parser.add_argument('--equalization_method', type=str, default='mrc',
                         choices=['identity', 'zf', 'mrc', 'mmse'],
                         help='Channel equalization method for fading channels')
     
@@ -215,15 +215,6 @@ def validate_arguments(args):
             print(f"Info: Using {args.channel_model.upper()} channel model with "
                   f"{args.equalization_method.upper()} equalization")
     
-    # 验证Polar码参数
-    if args.communication_mode == 4:
-        if args.N & (args.N - 1) != 0:  # 检查是否为2的幂
-            print("Error: Polar code length N must be a power of 2")
-            return False
-        if args.k >= args.N:
-            print("Error: Information bits k must be less than code length N")
-            return False
-        print(f"Info: Polar coding - N={args.N}, k={args.k}, rate={args.k/args.N:.3f}")
     
     # 计算测试SNR范围 - 修复参数名
     if hasattr(args, 'snr_min') and hasattr(args, 'snr_max') and hasattr(args, 'test_snr_steps'):

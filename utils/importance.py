@@ -81,112 +81,99 @@ class JointImportanceEstimator_group(nn.Module):
         self.group_dim = group_dim
         self.use_frequency_features = use_frequency_features
         self.num_classes = num_classes
-        
-        # 验证维度匹配
+        # 冗余参数保留，不做使用
+
         assert feature_dim == num_groups * group_dim, \
             f"feature_dim ({feature_dim}) must equal num_groups * group_dim ({num_groups} * {group_dim})"
-        
-        # 联合特征的维度 = feature_dim + feature_dim + 1 = 128 + 128 + 1 = 257
-        joint_feature_dim = feature_dim * 2 
-        
-        # 单一胶囊网络处理联合特征
-        self.joint_capsule = CapsuleNetwork(joint_feature_dim, num_groups, group_dim)
-        
-        # 简化的重要性估计器 - 直接从胶囊特征预测组级重要性
-        self.importance_estimator = nn.Sequential(
-            nn.Linear(num_groups * group_dim, 64),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, num_groups),
-            nn.Softmax(dim=-1)
-        )
-        
-    def compute_gradient_proxy(self, pre_task_logits):
-        """
-        从pre_task_logits计算梯度代理
-        
-        Args:
-            pre_task_logits: 预任务logits [batch_size, num_classes]
-            
-        Returns:
-            gradient_proxy: 梯度代理特征 [batch_size, feature_dim]
-        """
-        batch_size = pre_task_logits.size(0)
-        
-        # 计算softmax概率
-        task_probs = F.softmax(pre_task_logits, dim=-1)
-        
-        # 计算不确定性（熵）
-        entropy = -torch.sum(task_probs * torch.log(task_probs + 1e-8), dim=-1, keepdim=True)
-        
-        # 计算最大概率（置信度）
-        max_prob = torch.max(task_probs, dim=-1, keepdim=True)[0]
-        
-        # 计算预测方差
-        prob_var = torch.var(task_probs, dim=-1, keepdim=True)
-        
-        # 结合多个梯度代理指标
-        gradient_indicators = torch.cat([entropy, max_prob, prob_var], dim=-1)
-        
-        # 扩展到特征维度
-        gradient_proxy = gradient_indicators.repeat(1, self.feature_dim // 3 + 1)[:, :self.feature_dim]
-        
-        return gradient_proxy
-    
-    def expand_group_importance_to_feature_dim(self, group_importance):
-        """
-        将组级别的重要性扩展到特征维度
-        
-        Args:
-            group_importance: 组级别重要性 [batch_size, num_groups]
-            
-        Returns:
-            feature_importance: 特征级别重要性 [batch_size, feature_dim]
-        """
-        batch_size = group_importance.size(0)
-        
-        # 将每个组的重要性复制到组内的所有维度
-        # [batch_size, num_groups] -> [batch_size, num_groups, group_dim]
-        expanded_importance = group_importance.unsqueeze(-1).repeat(1, 1, self.group_dim)
-        
-        # 重塑为特征维度 [batch_size, feature_dim]
-        feature_importance = expanded_importance.view(batch_size, self.feature_dim)
-        
-        return feature_importance
-        
-    def forward(self, features, pre_task_logits):
-        """
-        简化的前向传播流程
-        
-        Args:
-            features: 特征 [batch_size, feature_dim]
-            pre_task_logits: 预任务logits [batch_size, num_classes]
-            
-        Returns:
-            tuple: (final_importance, channel_importance, task_importance)
-        """
-        batch_size = features.size(0)
 
-        # 步骤1: 计算梯度代理
-        task_proxy = self.compute_gradient_proxy(pre_task_logits)
-        
-        # 步骤2: 构建联合特征 [batch, 256] = [batch, 128+128]
-        joint_features = torch.cat([features, task_proxy], dim=-1)
-        
-        # 步骤3: 通过胶囊网络压缩为8组特征
-        joint_capsules = self.joint_capsule(joint_features)  # [batch, num_groups, group_dim]
-        
-        # 步骤4: 展平胶囊特征并估计组级重要性
-        capsule_flat = joint_capsules.view(batch_size, -1)  # [batch, num_groups * group_dim]
-        group_importance = self.importance_estimator(capsule_flat)  # [batch, num_groups]
-        
-        # 步骤5: 重新归一化确保概率分布
-        final_group_importance = F.softmax(group_importance, dim=-1)
-        
-        # 步骤6: 扩展到特征维度
-        final_importance = self.expand_group_importance_to_feature_dim(final_group_importance)
-        
-        # 为了保持接口兼容性，返回相同的结果作为channel_importance和task_importance
-        return final_importance, final_importance, final_importance
+        # 分组胶囊权重
+        self.W = nn.Parameter(torch.randn(num_groups, group_dim, group_dim))
+        # 自注意力缩放
+        self.attn_scale = group_dim ** -0.5
+        # 门控融合MLP
+        self.gate_mlp = nn.Sequential(
+            nn.Linear(2, 8), nn.ReLU(), nn.Linear(8, 1), nn.Sigmoid()
+        )
+
+    @staticmethod
+    def squash(x, dim=-1):
+        norm_sq = (x ** 2).sum(dim=dim, keepdim=True)
+        return norm_sq / (1 + norm_sq) * x / (norm_sq.sqrt() + 1e-8)
+
+    def dynamic_routing(self, u, num_iter=2):
+        # u: [B, num_groups, group_dim]
+        B = u.size(0)
+        logits = u.new_zeros(B, self.num_groups)
+        for _ in range(num_iter):
+            c = F.softmax(logits, dim=1).unsqueeze(-1)  # [B, num_groups, 1]
+            v = (c * u).sum(dim=1, keepdim=True)        # [B, 1, group_dim]
+            v = self.squash(v)
+            agreement = (u * v).sum(dim=-1)             # [B, num_groups]
+            logits = logits + agreement
+        c = F.softmax(logits, dim=1).unsqueeze(-1)
+        v_i = c * u                                    # [B, num_groups, group_dim]
+        return v_i, v
+
+    def self_attention(self, v_i):
+        # v_i: [B, num_groups, group_dim]
+        attn_score = torch.einsum('bnd,bmd->bnm', v_i, v_i) * self.attn_scale
+        attn = F.softmax(attn_score, dim=-1)           # [B, num_groups, num_groups]
+        v_hat = torch.einsum('bnm,bmd->bnd', attn, v_i)
+        return v_hat
+
+    def expand_group_importance_to_feature_dim(self, group_importance):
+        batch_size = group_importance.size(0)
+        expanded_importance = group_importance.unsqueeze(-1).repeat(1, 1, self.group_dim)
+        feature_importance = expanded_importance.view(batch_size, self.feature_dim)
+        return feature_importance
+
+    def forward(self, features, channel_importance=None, channel_noise=None, use_channel_guided=True):
+        """
+        新流程：
+        1. 特征分组，映射为初级胶囊
+        2. 两次动态路由得到组胶囊
+        3. 自注意力融合
+        4. 范数融合加权，softmax归一化
+        5. 新方案：融合信道可靠性（如巴氏参数）和信道噪声，指导特征重要性生成
+        """
+        B = features.size(0)
+        h = features.view(B, self.num_groups, self.group_dim)  # [B, num_groups, group_dim]
+        # 初级胶囊
+        u = torch.einsum('bnd,ndh->bnh', h, self.W)            # [B, num_groups, group_dim]
+        u = self.squash(u)
+        # 两次动态路由
+        v_i, v_global = self.dynamic_routing(u, num_iter=2)
+        # 自注意力
+        v_hat = self.self_attention(v_i)
+        # 范数（存在概率）
+        p = v_i.norm(dim=-1)                                  # [B, num_groups]
+        q = v_hat.norm(dim=-1)                                # [B, num_groups]
+        # 门控融合
+        gate = self.gate_mlp(torch.stack([p, q], dim=-1)).squeeze(-1)  # [B, num_groups]
+        alpha_logits = gate * p + (1 - gate) * q
+        alpha = F.softmax(alpha_logits, dim=1)                # [B, num_groups]
+        final_importance = self.expand_group_importance_to_feature_dim(alpha)
+        # --- 新方法：信道可靠性引导融合 ---
+        fusion_importance = None
+        if use_channel_guided and channel_importance is not None and channel_noise is not None:
+            # channel_importance: [B, feature_dim] 或 [1, feature_dim] 或 [feature_dim]W
+            # 自动扩展到batch维度
+            if channel_importance.dim() == 1 and channel_importance.size(0) == self.feature_dim:
+                channel_importance = channel_importance.unsqueeze(0).expand(B, -1)
+            elif channel_importance.dim() == 2 and channel_importance.size(0) == 1 and channel_importance.size(1) == self.feature_dim:
+                channel_importance = channel_importance.expand(B, -1)
+            elif channel_importance.dim() == 2 and channel_importance.size(0) == B and channel_importance.size(1) == self.feature_dim:
+                pass  # already correct
+            else:
+                raise RuntimeError(f"channel_importance shape {channel_importance.shape} does not match [B, feature_dim]")
+            #极化码的复杂度太高，弃用
+            channel_group = channel_importance.view(B, self.num_groups, self.group_dim).mean(dim=-1)
+            fusion_logits = torch.exp(alpha_logits)/(torch.exp(-channel_noise)+1e-6)
+            
+            fusion_alpha = F.softmax(fusion_logits,dim=1)  # [B, num_groups]
+            # 稀疏性门控：噪声越大，稀疏性越强（用exp(-noise)缩放softmax温度）
+            fusion_importance = self.expand_group_importance_to_feature_dim(fusion_alpha)# [B, num_groups]
+            #print("fusion_importance shape:", fusion_importance)
+        # 返回三种重要性估计，便于解耦评估
+        return final_importance, fusion_importance, channel_importance
+
