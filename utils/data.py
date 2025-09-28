@@ -11,6 +11,7 @@ import os
 import torch
 import torchaudio
 import numpy as np
+from scipy.io import wavfile
 from torch.utils.data import Dataset
 
 def load_file_list(file_list_path):
@@ -176,12 +177,23 @@ class WavDataset(Dataset):
         """
         filename, label = self.file_list[idx]
         file_path = os.path.join(self.data_dir, filename)
+        file_path = file_path.replace('\\', '/')  # Ensure path compatibility across platforms
+        file_path = os.path.abspath(file_path)  # Convert to absolute path for torchaudio
         
-        # Load audio file
-        waveform, sr = torchaudio.load(file_path)
+        # Load audio file using scipy instead of torchaudio
+        sr, waveform_np = wavfile.read(file_path)
+        # Convert to torch tensor and ensure float type
+        waveform = torch.from_numpy(waveform_np).float()
+        # Add channel dimension if mono
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)
+        
         # Resample if needed
         if sr != self.sample_rate:
-            waveform = torchaudio.transforms.Resample(sr, self.sample_rate)(waveform)
+            # Simple resampling using scipy
+            import scipy.signal
+            target_length = int(len(waveform[0]) * self.sample_rate / sr)
+            waveform = torch.from_numpy(scipy.signal.resample(waveform.numpy(), target_length, axis=1)).float()
         
         # Apply augmentation if enabled
         if self.augment:

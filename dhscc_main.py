@@ -240,21 +240,23 @@ def load_datasets(args):
     train_dataset = WavDataset(train_file_list, args.data_dir, augment=True)
     test_dataset = WavDataset(test_file_list, args.data_dir, augment=False)
     
-    # Create data loaders
+    # Create data loaders - 优化PyTorch 2.x在Windows上的兼容性
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=4,
-        pin_memory=True
+        num_workers=0,  # PyTorch 2.x在Windows上多进程可能有问题
+        pin_memory=False,  # 禁用pin_memory以提高兼容性
+        persistent_workers=False
     )
-    
+
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=args.batch_size * 2,
         shuffle=False,
-        num_workers=4,
-        pin_memory=True
+        num_workers=0,  # 测试时使用单进程以提高速度
+        pin_memory=False,  # 禁用pin_memory
+        persistent_workers=False
     )
     
     return train_loader, test_loader, num_classes

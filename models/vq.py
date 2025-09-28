@@ -313,8 +313,10 @@ class GroupVectorQuantizer(nn.Module):
         返回:
             torch.Tensor: 重构的特征张量，形状与输入时一致。缺失的组将被设为0值。
         """
-        # 确定输入类型
-        is_1d = len(indices.shape) == 3 and indices.shape[0] != len(self.quantizers)
+        # 确定输入类型 - 更可靠的检测方法
+        # 1D: [batch_size, n_groups, n_q_per_group] - 第三维通常很小(4)
+        # 3D: [n_groups, n_quantizers, batch_size, n_samples] - 四维
+        is_1d = len(indices.shape) == 3
         
         if is_1d:
             # 1D情况: [batch_size, n_groups, n_q_per_group]，n_groups可能小于self.n_codes_group

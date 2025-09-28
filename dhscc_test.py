@@ -680,6 +680,9 @@ def test(model, test_loader, epoch, snr, device):
     
     criterion = nn.CrossEntropyLoss()
     
+    # 确保模型在正确的设备上
+    model = model.to(device)
+    
     try:
         with torch.no_grad():
             # 设置模型为推理模式，关闭探索
@@ -687,7 +690,9 @@ def test(model, test_loader, epoch, snr, device):
                 model.set_inference_mode(True)
             
             for data, target in test_loader:
-                data, target = data.to(device), target.to(device)
+                # 确保数据在正确的设备上 - PyTorch 2.x优化
+                data = data.to(device, non_blocking=True)
+                target = target.to(device, non_blocking=True)
                 
                 # 每个新batch开始时重置group选择
                 if hasattr(model, 'reset_batch_group'):
@@ -719,6 +724,8 @@ def test(model, test_loader, epoch, snr, device):
     
     except Exception as e:
         print(f"Warning: Error during testing: {e}")
+        import traceback
+        traceback.print_exc()
         return 0.0, 0.0, 0.0
     
     finally:
