@@ -33,6 +33,7 @@ from sender.modulation import Modulator
 from receiver.demodulation import Demodulator
 from sender.polar_encoding import PolarEncoder
 from receiver.polar_decoding import PolarSCDecoder
+from utils.signal_processing import psnr_to_noise
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -246,8 +247,16 @@ def train_end_to_end(sender_model, receiver_model, quantizer, channel_modem, tra
             batch_size = data.size(0)
             total_samples += batch_size
 
+            # Random SNR selection for training (similar to dhscc_train.py)
+            if hasattr(args, 'snr_min') and hasattr(args, 'snr_max'):
+                snr_db = torch.rand(1).item() * (args.snr_max - args.snr_min) + args.snr_min
+            else:
+                snr_db = getattr(args, 'channel_snr', 3.0)
+            
             # Forward pass through sender
-            channel_noise = torch.randn(batch_size, 1).to(device) * 0.1 + 1.0
+            # channel_noise = torch.randn(batch_size, 1).to(device) * 0.1 + 1.0  # Old fixed noise
+            # Use SNR-dependent noise level
+            channel_noise = psnr_to_noise(torch.tensor(snr_db, device=device)).unsqueeze(0).expand(batch_size, -1)
             sender_output = sender_model(data, channel_noise)
 
             features, importance_weights, pre_task_logits, feature_shape, original_encoded_features = sender_output
@@ -262,17 +271,17 @@ def train_end_to_end(sender_model, receiver_model, quantizer, channel_modem, tra
             if hasattr(channel_modem, 'transmit_with_polar_coding'):
                 received_features, ber, transmit_mse = channel_modem.transmit_with_polar_coding(
                     quantized_features, quantizer_indices, 
-                    snr_db=getattr(args, 'snr', 20.0),
+                    snr_db=snr_db,
                     use_coding=use_coding
                 )
             else:
                 # Fallback: simple transmission without proper coding
-                received_features = channel_modem.transmit(quantized_features, getattr(args, 'snr', 20.0))
+                received_features = channel_modem.transmit(quantized_features, snr_db)
                 ber = torch.tensor(0.01, device=device)  # Placeholder BER
                 transmit_mse = torch.tensor(0.0, device=device)
             
             # Receiver processing (all phases)
-            receiver_output = receiver_model(received_features, getattr(args, 'snr', 20.0), feature_shape)
+            receiver_output = receiver_model(received_features, channel_noise, feature_shape)
 
             # Calculate losses (same formula as dhscc_train.py for all phases)
             classification_loss = nn.CrossEntropyLoss()(receiver_output, target)
@@ -311,7 +320,7 @@ def train_end_to_end(sender_model, receiver_model, quantizer, channel_modem, tra
 
         # Validation
         if test_loader is not None:
-            test_loss, test_acc, test_ber = validate_end_to_end(sender_model, receiver_model, quantizer, channel_modem, test_loader, device, use_coding=use_coding)
+            test_loss, test_acc, test_ber = validate_end_to_end(sender_model, receiver_model, quantizer, channel_modem, test_loader, device, args, use_coding=use_coding)
             history['test_loss'].append(test_loss)
             history['test_acc'].append(test_acc)
             history['test_ber'].append(test_ber)
@@ -347,9 +356,9 @@ def train_end_to_end(sender_model, receiver_model, quantizer, channel_modem, tra
     }
 
 
-def validate_end_to_end(sender_model, receiver_model, quantizer, channel_modem, test_loader, device, use_coding=True):
+def validate_end_to_end(sender_model, receiver_model, quantizer, channel_modem, test_loader, device, args, use_coding=True):
     """
-    Validation function for end-to-end system.
+    Validation function for end-to-end system with multiple SNR testing (similar to dhscc_train.py).
 
     Args:
         sender_model: SenderNet model
@@ -358,63 +367,88 @@ def validate_end_to_end(sender_model, receiver_model, quantizer, channel_modem, 
         channel_modem: ChannelModem
         test_loader: DataLoader for testing
         device: torch.device
+        args: Training arguments
         use_coding: Whether to use polar coding in validation
 
     Returns:
-        tuple: (loss, accuracy, ber)
+        tuple: (avg_loss, avg_accuracy, avg_ber)
     """
     sender_model.eval()
     receiver_model.eval()
 
-    total_loss = 0.0
-    total_acc = 0.0
-    total_ber = 0.0
-    total_samples = 0
+    # Test multiple SNRs and average results (similar to dhscc_train.py)
+    snr_levels = []
+    if hasattr(args, 'snr_min') and hasattr(args, 'snr_max'):
+        snr_levels = [args.snr_min, (args.snr_min + args.snr_max) / 2, args.snr_max]
+    else:
+        snr_levels = [getattr(args, 'channel_snr', 3.0)]
 
-    with torch.no_grad():
-        for data, target in test_loader:
-            data, target = data.to(device), target.to(device)
-            batch_size = data.size(0)
-            total_samples += batch_size
+    all_losses = []
+    all_accs = []
+    all_bers = []
 
-            # Forward pass
-            channel_noise = torch.randn(batch_size, 1).to(device) * 0.1 + 1.0
-            sender_output = sender_model(data, channel_noise)
-            features, importance_weights, pre_task_logits, feature_shape, original_encoded_features = sender_output
-            
-            # Quantize features for transmission
-            quantized_features, quantizer_indices, vq_loss = quantizer.encode(features)
-            
-            # Use integrated polar coding transmission if available
-            if hasattr(channel_modem, 'transmit_with_polar_coding'):
-                received_features, ber, transmit_mse = channel_modem.transmit_with_polar_coding(
-                    quantized_features, quantizer_indices, 
-                    snr_db=20.0,  # Fixed SNR for validation
-                    use_coding=use_coding
-                )
-            else:
-                # Fallback: simple transmission
-                received_features = channel_modem.transmit(quantized_features, 20.0)
-                ber = 0.01  # Placeholder BER
-            
-            # Receiver processing
-            receiver_output = receiver_model(received_features, 20.0, feature_shape)
+    for snr_db in snr_levels:
+        total_loss = 0.0
+        total_acc = 0.0
+        total_ber = 0.0
+        total_samples = 0
 
-            # Calculate loss
-            loss = nn.CrossEntropyLoss()(receiver_output, target)
-            total_loss += loss.item() * batch_size
+        with torch.no_grad():
+            for data, target in test_loader:
+                data, target = data.to(device), target.to(device)
+                batch_size = data.size(0)
+                total_samples += batch_size
 
-            # Calculate accuracy
-            predictions = receiver_output.argmax(dim=1)
-            acc = (predictions == target).float().mean().item() * 100
-            total_acc += acc * batch_size
+                # Forward pass
+                # channel_noise = torch.randn(batch_size, 1).to(device) * 0.1 + 1.0  # Old fixed noise
+                # Use SNR-dependent noise level for consistency
+                channel_noise = psnr_to_noise(torch.tensor(snr_db, device=device)).unsqueeze(0).expand(batch_size, -1)
+                sender_output = sender_model(data, channel_noise)
+                features, importance_weights, pre_task_logits, feature_shape, original_encoded_features = sender_output
+                
+                # Quantize features for transmission
+                quantized_features, quantizer_indices, vq_loss = quantizer.encode(features)
+                
+                # Use integrated polar coding transmission if available
+                if hasattr(channel_modem, 'transmit_with_polar_coding'):
+                    received_features, ber, transmit_mse = channel_modem.transmit_with_polar_coding(
+                        quantized_features, quantizer_indices, 
+                        snr_db=snr_db,
+                        use_coding=use_coding
+                    )
+                else:
+                    # Fallback: simple transmission
+                    received_features = channel_modem.transmit(quantized_features, snr_db)
+                    ber = 0.01  # Placeholder BER
+                
+                # Receiver processing
+                receiver_output = receiver_model(received_features, channel_noise, feature_shape)
 
-            # Add BER
-            if isinstance(ber, torch.Tensor):
-                ber = ber.item()
-            total_ber += ber * batch_size
+                # Calculate loss
+                loss = nn.CrossEntropyLoss()(receiver_output, target)
+                total_loss += loss.item() * batch_size
 
-    return total_loss / total_samples, total_acc / total_samples, total_ber / total_samples
+                # Calculate accuracy
+                predictions = receiver_output.argmax(dim=1)
+                acc = (predictions == target).float().mean().item() * 100
+                total_acc += acc * batch_size
+
+                # Add BER
+                if isinstance(ber, torch.Tensor):
+                    ber = ber.item()
+                total_ber += ber * batch_size
+
+        # Average for this SNR
+        avg_loss = total_loss / total_samples
+        avg_acc = total_acc / total_samples
+        avg_ber = total_ber / total_samples
+
+        all_losses.append(avg_loss)
+        all_accs.append(avg_acc)
+        all_bers.append(avg_ber)
+
+    # Return averages across all SNR levels
+    return sum(all_losses) / len(all_losses), sum(all_accs) / len(all_accs), sum(all_bers) / len(all_bers)
 
 
 def save_checkpoint(sender_model, receiver_model, quantizer, sender_optimizer, receiver_optimizer, epoch, phase, metrics, save_dir, is_best=False):

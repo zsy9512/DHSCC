@@ -22,6 +22,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 # Add current directory to path for imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 from sender.sender_model import SenderNet
 from receiver.receiver_model import ReceiverNet
@@ -29,6 +30,12 @@ from sender.quantizer import VibrationVectorQuantizer
 from channel_modem.channel_modem import ChannelModem
 from train_end_to_end import train_end_to_end
 from tests.end_to_end_test import run_end_to_end_tests
+
+# Import data utilities from parent directory
+from utils.data import WavDataset, load_file_list, load_class_names
+
+# Import common data loader
+from data_loader import create_data_loaders_from_args
 
 
 def create_argument_parser():
@@ -84,6 +91,10 @@ def create_argument_parser():
     # ==================== 信道参数 ====================
     parser.add_argument('--channel_snr', type=float, default=3.0,
                         help='Signal-to-Noise Ratio for channel simulation (dB)')
+    parser.add_argument('--snr_min', type=float, default=0.0,
+                        help='Minimum SNR for training/testing range (dB)')
+    parser.add_argument('--snr_max', type=float, default=5.0,
+                        help='Maximum SNR for training/testing range (dB)')
     parser.add_argument('--channel_type', type=str, default='awgn',
                         choices=['awgn', 'rayleigh', 'rician'],
                         help='Channel type for simulation')
@@ -145,30 +156,8 @@ def load_checkpoint(checkpoint_path, sender_model, receiver_model, quantizer, se
 
 
 def create_data_loaders(args):
-    """Create data loaders for training and testing."""
-    # Create dummy vibration signal data: [batch_size, channels, time]
-    # Vibration signals typically have 1 channel and variable time length
-    channels = 1
-    time_length = 128  # Typical vibration signal length
-    num_samples = 1000
-    num_classes = args.num_classes
-
-    # Create random vibration signals
-    train_data = torch.randn(num_samples, channels, time_length)
-    train_labels = torch.randint(0, num_classes, (num_samples,))
-    test_data = torch.randn(200, channels, time_length)
-    test_labels = torch.randint(0, num_classes, (200,))
-
-    train_dataset = TensorDataset(train_data, train_labels)
-    test_dataset = TensorDataset(test_data, test_labels)
-
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
-
-    print(f"Created data loaders with {len(train_dataset)} train samples, {len(test_dataset)} test samples")
-    print(f"Data shape: [batch_size, {channels}, {time_length}] (channels, time)")
-
-    return train_loader, test_loader
+    """Create data loaders for training and testing using actual vibration dataset."""
+    return create_data_loaders_from_args(args)
 
 
 def train_model(args):
@@ -189,7 +178,12 @@ def train_model(args):
     channel_modem = ChannelModem(args)
 
     # Create data loaders
-    train_loader, test_loader = create_data_loaders(args)
+    train_loader, test_loader, num_classes = create_data_loaders(args)
+
+    # Update args.num_classes if it was auto-detected
+    if hasattr(args, 'num_classes') and args.num_classes != num_classes:
+        print(f"Auto-detected {num_classes} classes from dataset")
+        args.num_classes = num_classes
 
     # Resume from checkpoint if specified
     if args.resume:
@@ -219,10 +213,10 @@ def train_model(args):
     print("="*60)
     print(f"Training directory: {results['training_dir']}")
     print(f"Best checkpoint: {results['best_checkpoint']}")
-    print(".2f")
+    print(f"Final train accuracy: {results['final_metrics']['train_acc']:.2f}%")
     if results['final_metrics']['test_acc'] is not None:
-        print(".2f")
-    print(".6f")
+        print(f"Final test accuracy: {results['final_metrics']['test_acc']:.2f}%")
+    print(f"Final BER: {results['final_metrics']['ber']:.6f}")
 
     return results
 

@@ -362,8 +362,11 @@ class ChannelModem:
         
         # For transmit_mse: return 0 when not using coding (pretrain phase)
         if not use_coding:
-            transmit_mse = torch.tensor(0.0, device=device)
-            received_features = quantized_features  # Perfect transmission
+            # Even in pretrain phase, add some noise to make training more realistic
+            noise_level = 0.1  # Small fixed noise level for pretrain
+            noise = torch.randn_like(quantized_features) * noise_level
+            received_features = quantized_features + noise
+            transmit_mse = nn.functional.mse_loss(quantized_features, received_features)
         else:
             # Convert binary back to features (simplified reconstruction)
             # For transmit_mse calculation, use a simplified approach:
