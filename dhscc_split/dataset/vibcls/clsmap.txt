@@ -1,0 +1,1 @@
+{'antiVibPad': 0, 'cork': 1, 'aluminumGrid': 2, 'felt': 3, 'foam': 4, 'bamboo': 5, 'BalticBrown': 6, 'polyesterPad': 7, 'ceramic': 8, 'rubber': 9}
