@@ -208,12 +208,27 @@ def train_end_to_end(sender_model, receiver_model, quantizer, channel_modem, tra
         if epoch < pretrain_epochs:
             phase = 'pretrain'
             use_coding = False  # Disable polar coding in pretrain
+            # Pretrain: train all components end-to-end without coding
+            for param in sender_model.parameters():
+                param.requires_grad = True
+            for param in receiver_model.parameters():
+                param.requires_grad = True
         elif epoch < selector_epochs:
             phase = 'selector'
             use_coding = True   # Enable polar coding in selector phase
+            # Selector: freeze sender, train receiver with adaptive coding
+            for param in sender_model.parameters():
+                param.requires_grad = False
+            for param in receiver_model.parameters():
+                param.requires_grad = True
         else:
             phase = 'final'
             use_coding = True   # Enable polar coding in final phase
+            # Final: unfreeze all, fine-tune the complete system
+            for param in sender_model.parameters():
+                param.requires_grad = True
+            for param in receiver_model.parameters():
+                param.requires_grad = True
 
         history['phases'].append(phase)
 
@@ -237,57 +252,45 @@ def train_end_to_end(sender_model, receiver_model, quantizer, channel_modem, tra
 
             features, importance_weights, pre_task_logits, feature_shape, original_encoded_features = sender_output
             
-            # Quantize features for transmission
+            # Quantize features for transmission (all phases)
             quantized_features, quantizer_indices, vq_loss = quantizer.encode(features)
             
-            if phase == 'pretrain':
-                # Only train sender, use perfect transmission (no channel)
-                loss = nn.CrossEntropyLoss()(pre_task_logits, target)
-                ber = 0.0  # No BER in pretrain
-                acc = (pre_task_logits.argmax(dim=1) == target).float().mean().item() * 100
-
-                sender_optimizer.zero_grad()
-                loss.backward()
-                sender_optimizer.step()
-                
+            # Annealing mechanism - gradually introduce transmit loss (same as dhscc_train.py)
+            anneal_ratio = min(1.0, epoch / 20.0)
+            
+            # Use channel_modem for transmission with polar coding integration (all phases)
+            if hasattr(channel_modem, 'transmit_with_polar_coding'):
+                received_features, ber, transmit_mse = channel_modem.transmit_with_polar_coding(
+                    quantized_features, quantizer_indices, 
+                    snr_db=getattr(args, 'snr', 20.0),
+                    use_coding=use_coding
+                )
             else:
-                # Joint training with polar coding
-                # Use channel_modem for transmission with polar coding integration
-                if hasattr(channel_modem, 'transmit_with_polar_coding'):
-                    # Use integrated polar coding transmission
-                    received_features, ber, transmit_mse = channel_modem.transmit_with_polar_coding(
-                        quantized_features, quantizer_indices, 
-                        snr_db=getattr(args, 'snr', 20.0),
-                        use_coding=use_coding
-                    )
-                else:
-                    # Fallback: simple transmission without proper coding
-                    received_features = channel_modem.transmit(quantized_features, getattr(args, 'snr', 20.0))
-                    ber = torch.tensor(0.01, device=device)  # Placeholder BER
-                    transmit_mse = torch.tensor(0.0, device=device)
-                
-                # Receiver processing
-                receiver_output = receiver_model(received_features, getattr(args, 'snr', 20.0), feature_shape)
+                # Fallback: simple transmission without proper coding
+                received_features = channel_modem.transmit(quantized_features, getattr(args, 'snr', 20.0))
+                ber = torch.tensor(0.01, device=device)  # Placeholder BER
+                transmit_mse = torch.tensor(0.0, device=device)
+            
+            # Receiver processing (all phases)
+            receiver_output = receiver_model(received_features, getattr(args, 'snr', 20.0), feature_shape)
 
-                # Calculate losses
-                classification_loss = nn.CrossEntropyLoss()(receiver_output, target)
-                
-                # Add VQ commitment loss
-                vq_weight = getattr(args, 'vq_loss_weight', 0.1)
-                total_loss = classification_loss + vq_weight * vq_loss
+            # Calculate losses (same formula as dhscc_train.py for all phases)
+            classification_loss = nn.CrossEntropyLoss()(receiver_output, target)
+            vq_weight = getattr(args, 'vq_loss_weight', 0.1)
+            total_loss = classification_loss + vq_weight * vq_loss + 0.1 * anneal_ratio * transmit_mse
+            
+            # Calculate metrics
+            predictions = receiver_output.argmax(dim=1)
+            acc = (predictions == target).float().mean().item() * 100
 
-                # Calculate metrics
-                predictions = receiver_output.argmax(dim=1)
-                acc = (predictions == target).float().mean().item() * 100
+            # Backward pass (gradients computed for unfrozen parameters only)
+            sender_optimizer.zero_grad()
+            receiver_optimizer.zero_grad()
+            total_loss.backward()
+            sender_optimizer.step()
+            receiver_optimizer.step()
 
-                # Backward pass
-                sender_optimizer.zero_grad()
-                receiver_optimizer.zero_grad()
-                total_loss.backward()
-                sender_optimizer.step()
-                receiver_optimizer.step()
-
-                loss = total_loss.item()
+            loss = total_loss.item()
 
             epoch_loss += loss * batch_size
             epoch_acc += acc * batch_size

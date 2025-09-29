@@ -355,17 +355,25 @@ class ChannelModem:
             # Hard decision decoding
             received_binary = (received_symbols > 0).float()
         
-        # Convert binary back to features (simplified reconstruction)
-        received_features = received_binary.unsqueeze(-1).expand(-1, -1, quantized_features.shape[-1]).float()
-        received_features = received_features.mean(dim=1, keepdim=True)  # Average to get feature dimension back
-        
-        # Calculate BER
+        # Calculate BER first
         bit_errors = (binary_data != received_binary).sum().float()
         total_bits = binary_data.numel()
         ber = bit_errors / total_bits
         
-        # Calculate transmission MSE (simplified)
-        transmit_mse = torch.tensor(0.0, device=device)
+        # For transmit_mse: return 0 when not using coding (pretrain phase)
+        if not use_coding:
+            transmit_mse = torch.tensor(0.0, device=device)
+            received_features = quantized_features  # Perfect transmission
+        else:
+            # Convert binary back to features (simplified reconstruction)
+            # For transmit_mse calculation, use a simplified approach:
+            # received_features = quantized_features + noise based on BER
+            noise_level = ber * torch.std(quantized_features).detach()  # Noise proportional to BER
+            noise = torch.randn_like(quantized_features) * noise_level
+            received_features = quantized_features + noise
+            
+            # Calculate transmission MSE (between quantized and received features)
+            transmit_mse = nn.functional.mse_loss(quantized_features, received_features)
         
         return received_features, ber, transmit_mse
     
