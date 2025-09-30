@@ -26,7 +26,7 @@ from receiver.polar_decoding import PolarSCDecoder
 from sender.quantizer import VibrationVectorQuantizer
 from sender.sender_model import SenderNet
 from receiver.receiver_model import ReceiverNet
-from channel_modem.channel_modem import ChannelModem
+from channel.channel_modem import ChannelModem
 
 def calculate_ber(original_bits, decoded_bits):
     """Calculate bit error rate between original and decoded bits."""

@@ -27,15 +27,15 @@ sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from sender.sender_model import SenderNet
 from receiver.receiver_model import ReceiverNet
 from sender.quantizer import VibrationVectorQuantizer
-from channel_modem.channel_modem import ChannelModem
+from channel.channel_modem import ChannelModem
 from train_end_to_end import train_end_to_end
-from tests.end_to_end_test import run_end_to_end_tests
+from end_to_end_test import run_end_to_end_tests
 
 # Import data utilities from parent directory
-from utils.data import WavDataset, load_file_list, load_class_names
+from data.data import WavDataset, load_file_list, load_class_names
 
 # Import common data loader
-from data_loader import create_data_loaders_from_args
+from data.data_loader import create_data_loaders_from_args
 
 
 def create_argument_parser():
@@ -43,13 +43,13 @@ def create_argument_parser():
     parser = argparse.ArgumentParser(description='DHSCC Split End-to-End Training')
 
     # ==================== 数据参数 ====================
-    parser.add_argument('--data_dir', type=str, default="dataset/vibcls/vibrodata",
+    parser.add_argument('--data_dir', type=str, default="data/vibcls/vibrodata",
                         help='Directory containing data files')
-    parser.add_argument('--train_list', type=str, default="dataset/vibcls/train.txt",
+    parser.add_argument('--train_list', type=str, default="data/vibcls/train.txt",
                         help='Path to training file list')
-    parser.add_argument('--test_list', type=str, default="dataset/vibcls/test.txt",
+    parser.add_argument('--test_list', type=str, default="data/vibcls/test.txt",
                         help='Path to test file list')
-    parser.add_argument('--class_map', type=str, default="dataset/vibcls/clsmap.txt",
+    parser.add_argument('--class_map', type=str, default="data/vibcls/clsmap.txt",
                         help='Path to class mapping file')
 
     # ==================== 模型参数 ====================

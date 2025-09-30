@@ -44,17 +44,10 @@ class PolarSCDecoder(torch.nn.Module):
     """
 
     def __init__(self, 
-                 frozen_pos=None,
-                 n=None,
-                 k=None,
+                 frozen_pos,
+                 n,
                  dtype=torch.float32):
         super().__init__()
-        
-        # If frozen_pos is not provided, generate it from k and n
-        if frozen_pos is None:
-            if k is None or n is None:
-                raise ValueError("Either frozen_pos or both k and n must be provided")
-            frozen_pos, _ = generate_5g_ranking(k, n)
         
         # Check inputs
         if not isinstance(n, numbers.Number):
@@ -423,7 +416,7 @@ class Polar5GDecoder(torch.nn.Module):
                  dtype=torch.float32):
         super().__init__()
 
-        from ..wireless_comm.polar_encoding import Polar5GEncoder
+        from .polar_encoding import Polar5GEncoder
         
         if not isinstance(enc_polar, Polar5GEncoder):
             raise TypeError("enc_polar must be Polar5GEncoder.")
@@ -656,60 +649,6 @@ class Polar5GDecoder(torch.nn.Module):
         """Alias for the forward method"""
         return self.forward(llr_ch)
 
-def generate_5g_ranking(k, n, sort=True):
-    """Generate 5G polar code ranking and return frozen and information positions.
-
-    Parameters
-    ----------
-    k: int
-        Number of information bits.
-    n: int
-        Codeword length.
-    sort: bool, default=True
-        If True, sort the positions by reliability (best positions first).
-
-    Returns
-    -------
-    [frozen_pos, info_pos]: list
-        frozen_pos: ndarray
-            An array of ints of shape `[n-k]` containing the frozen
-            positions.
-        info_pos: ndarray
-            An array of ints of shape `[k]` containing the information
-            positions.
-    """
-    # Load 5G polar ranking table
-    polar_5g_path = "polar_5G.csv"
-    try:
-        polar_5g = np.loadtxt(polar_5g_path, delimiter=';', dtype=int)
-    except:
-        # Fallback: generate basic ranking if file not found
-        polar_5g = np.arange(n)
-
-    # Extract ranking for given n
-    if n <= len(polar_5g):
-        ranking = polar_5g[:n]
-    else:
-        # Extend ranking if needed
-        ranking = np.concatenate([polar_5g, np.arange(len(polar_5g), n)])
-
-    # Get the k best positions
-    if sort:
-        ranking_sorted = np.sort(ranking)
-        info_pos = ranking_sorted[:k]
-        frozen_pos = ranking_sorted[k:]
-    else:
-        info_pos = ranking[:k]
-        frozen_pos = ranking[k:]
-
-    return frozen_pos, info_pos
-
-
-def get_frozen_pos(k, n):
-    """Helper function to get frozen positions for 5G Polar codes"""
-    frozen_pos, _ = generate_5g_ranking(k, n)
-    return frozen_pos
-
 class PolarSCLDecoder(torch.nn.Module):
     """Successive cancellation list (SCL) decoder for Polar codes and Polar-like codes.
 
@@ -771,10 +710,9 @@ class PolarSCLDecoder(torch.nn.Module):
     As commonly done, we assume frozen bits are set to 0.
     """
 
-    def __init__(self, 
-                 frozen_pos=None,
-                 n=None,
-                 k=None,
+    def __init__(self,
+                 frozen_pos,
+                 n,
                  list_size=8,
                  crc_degree=None,
                  use_fast_scl=True,
@@ -784,12 +722,6 @@ class PolarSCLDecoder(torch.nn.Module):
 
         super().__init__()
 
-        # If frozen_pos is not provided, generate it from k and n
-        if frozen_pos is None:
-            if k is None or n is None:
-                raise ValueError("Either frozen_pos or both k and n must be provided")
-            frozen_pos, _ = generate_5g_ranking(k, n)
-        
         # Check inputs
         if not isinstance(n, numbers.Number):
             raise TypeError("n must be a number.")
@@ -802,17 +734,12 @@ class PolarSCLDecoder(torch.nn.Module):
             raise TypeError("use_fast_scl must be bool.")
             
         # Fix the data type check for frozen_pos
-        # Convert frozen_pos to numpy array if it's not already one
         if not isinstance(frozen_pos, np.ndarray):
-            frozen_pos = np.array(frozen_pos)
+            raise TypeError("frozen_pos must be a numpy.ndarray.")
             
         # Ensure the array has an integer dtype
         if not np.issubdtype(frozen_pos.dtype, np.integer):
-            try:
-                # Try to convert to int32 if possible
-                frozen_pos = frozen_pos.astype(np.int32)
-            except:
-                raise TypeError("frozen_pos must consist of ints.")
+            raise TypeError("frozen_pos contains non-integer values.")
                 
         if len(frozen_pos) > n:
             raise ValueError("Number of elements in frozen_pos cannot be greater than n.")
@@ -849,7 +776,7 @@ class PolarSCLDecoder(torch.nn.Module):
             self._use_crc = True
             # Import CRCEncoder and CRCDecoder implementation
             try:
-                from ..wireless_comm.crc import CRCEncoder, CRCDecoder
+                from .crc import CRCEncoder, CRCDecoder
                 self._crc_encoder = CRCEncoder(crc_degree, dtype=dtype)
                 self._crc_decoder = CRCDecoder(self._crc_encoder, dtype=dtype)
                 self._k_crc = self._crc_decoder.encoder.crc_length

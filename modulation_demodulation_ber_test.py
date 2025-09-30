@@ -19,7 +19,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sender.modulation import Modulator
 from receiver.demodulation import Demodulator
-from channel_modem.channel_modem import ChannelModem
+from channel.channel_modem import ChannelModem
 
 def calculate_ber(original_bits, decoded_bits):
     """Calculate bit error rate between original and decoded bits."""

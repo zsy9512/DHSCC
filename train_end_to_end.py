@@ -28,12 +28,12 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from sender.sender_model import SenderNet
 from receiver.receiver_model import ReceiverNet
 from sender.quantizer import VibrationVectorQuantizer
-from channel_modem.channel_modem import ChannelModem
-from sender.modulation import Modulator
-from receiver.demodulation import Demodulator
+from channel.channel_modem import ChannelModem
+from sender.modulation import WirelessTransmitter
+from receiver.demodulation import WirelessReceiver
 from sender.polar_encoding import PolarEncoder
 from receiver.polar_decoding import PolarSCDecoder
-from utils.signal_processing import psnr_to_noise
+from sender.utils_signal import psnr_to_noise
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -393,6 +393,7 @@ def validate_end_to_end(sender_model, receiver_model, quantizer, channel_modem, 
     snr_levels = []
     if hasattr(args, 'snr_min') and hasattr(args, 'snr_max'):
         snr_levels = [args.snr_min, (args.snr_min + args.snr_max) / 2, args.snr_max]
+        print(f"🔍 Validating over SNR levels: {snr_levels}")
     else:
         snr_levels = [getattr(args, 'channel_snr', 3.0)]
 

@@ -24,9 +24,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sender.sender_model import SenderNet
 from receiver.receiver_model import ReceiverNet
 from sender.quantizer import VibrationVectorQuantizer
-from channel_modem.channel_modem import ChannelModem
-from sender.modulation import Modulator
-from receiver.demodulation import Demodulator
+from channel.channel_modem import ChannelModem
+from sender.modulation import WirelessTransmitter
+from receiver.demodulation import WirelessReceiver
 from sender.polar_encoding import PolarEncoder, get_frozen_pos
 from receiver.polar_decoding import PolarSCDecoder
 
@@ -187,8 +187,8 @@ def run_end_to_end_tests():
     channel_modem = ChannelModem(args)
 
     # Initialize modulation components
-    modulator = Modulator(args)
-    demodulator = Demodulator(args)
+    modulator = WirelessTransmitter(k=128, n=256, use_coding=True)
+    demodulator = WirelessReceiver(encoder_ref=polar_encoder, use_coding=True)
 
     # Initialize polar coding
     info_bits = 128

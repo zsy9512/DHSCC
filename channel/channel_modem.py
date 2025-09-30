@@ -214,7 +214,7 @@ class ChannelModem:
         
         # Try to initialize polar coding components
         try:
-            from ..wireless_comm.interface import create_wireless_interface
+            from .interface import create_wireless_interface
             self.wireless_interface = create_wireless_interface(args)
             print("Initialized WirelessInterface with adaptive polar coding systems")
         except ImportError as e:
@@ -258,11 +258,11 @@ class ChannelModem:
             if len(quantizer_indices.shape) == 3:
                 # Select groups based on group_to_use
                 selected_indices = quantizer_indices[:, :group_to_use, :]
-                print(f"📡 ChannelModem: Selected {group_to_use} groups from 3D indices shape {quantizer_indices.shape} -> {selected_indices.shape}")
+                # print(f"📡 ChannelModem: Selected {group_to_use} groups from 3D indices shape {quantizer_indices.shape} -> {selected_indices.shape}")
             else:
                 # Assume flat indices, select first group_to_use indices
                 selected_indices = quantizer_indices[:, :group_to_use] if quantizer_indices.shape[1] > group_to_use else quantizer_indices
-                print(f"📡 ChannelModem: Selected {group_to_use} indices from 2D indices shape {quantizer_indices.shape} -> {selected_indices.shape}")
+                # print(f"📡 ChannelModem: Selected {group_to_use} indices from 2D indices shape {quantizer_indices.shape} -> {selected_indices.shape}")
             
             # Transmit using WirelessInterface
             try:

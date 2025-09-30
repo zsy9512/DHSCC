@@ -9,13 +9,13 @@ def create_argument_parser():
     parser = argparse.ArgumentParser(description='DHSCC Sender')
 
     # ==================== 数据参数 ====================
-    parser.add_argument('--data_dir', type=str, default="dataset/vibcls/vibrodata",
+    parser.add_argument('--data_dir', type=str, default="../data/vibcls/vibrodata",
                         help='Directory containing data files')
-    parser.add_argument('--train_list', type=str, default="dataset/vibcls/train.txt",
+    parser.add_argument('--train_list', type=str, default="../data/train.txt",
                         help='Path to training file list')
-    parser.add_argument('--test_list', type=str, default="dataset/vibcls/test.txt",
+    parser.add_argument('--test_list', type=str, default="../data/test.txt",
                         help='Path to test file list')
-    parser.add_argument('--class_map', type=str, default="dataset/vibcls/clsmap.txt",
+    parser.add_argument('--class_map', type=str, default="../data/clsmap.txt",
                         help='Path to class mapping file')
 
     # ==================== 模型参数 ====================

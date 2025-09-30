@@ -7,8 +7,8 @@ signal data in batches of 5 samples, and prepares the encoded features for
 wireless transmission to a receiver machine.
 
 Usage:
-    python sender_inference.py --data_dir dataset/vibcls/vibrodata \
-                              --test_list dataset/vibcls/test.txt \
+    python sender_inference.py --data_dir ../data/vibcls/vibrodata \
+                              --test_list ../data/test.txt \
                               --sender_model checkpoints/final_sender_model.pth \
                               --quantizer_model checkpoints/final_quantizer.pth \
                               --batch_size 5
@@ -33,7 +33,7 @@ from data_loader import WavDataset, load_file_list, load_class_names
 
 from sender.sender_model import SenderNet
 from sender.quantizer import VibrationVectorQuantizer
-from channel_modem.channel_modem import ChannelModem
+from ..channel.channel_modem import ChannelModem
 
 
 def create_sender_inference_parser():
@@ -41,11 +41,11 @@ def create_sender_inference_parser():
     parser = argparse.ArgumentParser(description='DHSCC Sender Inference')
 
     # Data parameters
-    parser.add_argument('--data_dir', type=str, default="../dataset/vibcls/vibrodata",
+    parser.add_argument('--data_dir', type=str, default="../data/vibcls/vibrodata",
                         help='Directory containing data files')
-    parser.add_argument('--test_list', type=str, default="../dataset/vibcls/test.txt",
+    parser.add_argument('--test_list', type=str, default="../data/test.txt",
                         help='Path to test file list')
-    parser.add_argument('--class_map', type=str, default="../dataset/vibcls/clsmap.txt",
+    parser.add_argument('--class_map', type=str, default="../data/clsmap.txt",
                         help='Path to class mapping file')
 
     # Model parameters

@@ -21,7 +21,7 @@ from sender.modulation import Modulator
 from receiver.demodulation import Demodulator
 from sender.polar_encoding import PolarEncoder, get_frozen_pos
 from receiver.polar_decoding import PolarSCDecoder
-from channel_modem.channel_modem import ChannelModem
+from channel.channel_modem import ChannelModem
 
 def calculate_ber(original_bits, decoded_bits):
     """Calculate bit error rate between original and decoded bits."""

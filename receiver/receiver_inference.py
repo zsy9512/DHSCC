@@ -31,7 +31,7 @@ sys.path.insert(0, parent_dir)      # Add dhscc_split
 sys.path.insert(0, current_dir)     # Add receiver
 
 from receiver.receiver_model import ReceiverNet
-from channel_modem.channel_modem import ChannelModem
+from ..channel.channel_modem import ChannelModem
 
 
 def create_receiver_inference_parser():
