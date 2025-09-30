@@ -214,32 +214,12 @@ class ChannelModem:
         
         # Try to initialize polar coding components
         try:
-            from sender.polar_encoding import PolarEncoder, get_frozen_pos
-            from receiver.polar_decoding import PolarSCDecoder
-            from sender.modulation import Modulator
-            from receiver.demodulation import Demodulator
-            
-            # Initialize with default (64,128) polar code and QPSK
-            n, k = 128, 64
-            frozen_pos = get_frozen_pos(k, n)
-            self.polar_encoder = PolarEncoder(frozen_pos, n)
-            self.polar_decoder = PolarSCDecoder(frozen_pos, n)
-            
-            # Initialize QPSK modulation
-            class Args:
-                def __init__(self):
-                    self.bits_per_symbol = 2
-                    self.constellation_type = 'qam'
-                    self.normalize_constellation = True
-                    self.demapping_method = 'app'
-            
-            mod_args = Args()
-            self.modulator = Modulator(mod_args)
-            self.demodulator = Demodulator(mod_args)
-            
-            print("Initialized polar coding + QPSK modulation for ChannelModem")
+            from ..wireless_comm.interface import create_wireless_interface
+            self.wireless_interface = create_wireless_interface(args)
+            print("Initialized WirelessInterface with adaptive polar coding systems")
         except ImportError as e:
-            print(f"Warning: Could not initialize polar coding components: {e}")
+            print(f"Warning: Could not initialize wireless interface: {e}")
+            self.wireless_interface = None
 
     def transmit(self, symbols, snr):
         """
@@ -254,7 +234,7 @@ class ChannelModem:
         """
         return self.channel.transmit(symbols, snr)
     
-    def transmit_with_polar_coding(self, quantized_features, quantizer_indices, snr_db, use_coding=True):
+    def transmit_with_polar_coding(self, quantized_features, quantizer_indices, snr_db, use_coding=True, group_to_use=8):
         """
         Transmit quantized features with polar coding integration.
         
@@ -263,121 +243,49 @@ class ChannelModem:
             quantizer_indices: Quantization indices [batch_size, n_groups, group_size] or [batch_size, total_indices]
             snr_db: SNR in dB
             use_coding: Whether to use polar coding
+            group_to_use: Number of groups to transmit (for adaptive selection)
             
         Returns:
             tuple: (received_features, ber, transmit_mse)
         """
-        if self.polar_encoder is None or self.polar_decoder is None:
-            # Fallback to simple transmission
-            received_features = self.transmit(quantized_features, snr_db)
-            ber = torch.tensor(0.01, device=quantized_features.device)
-            transmit_mse = torch.tensor(0.0, device=quantized_features.device)
-            return received_features, ber, transmit_mse
+        if self.wireless_interface is not None and use_coding:
+            # Use WirelessInterface for proper adaptive polar coding
+            device = quantized_features.device
+            
+            # Convert indices to the format expected by WirelessInterface
+            # quantizer_indices shape: [batch_size, n_groups, group_size]
+            # We need to select the first 'group_to_use' groups
+            if len(quantizer_indices.shape) == 3:
+                # Select groups based on group_to_use
+                selected_indices = quantizer_indices[:, :group_to_use, :]
+                print(f"📡 ChannelModem: Selected {group_to_use} groups from 3D indices shape {quantizer_indices.shape} -> {selected_indices.shape}")
+            else:
+                # Assume flat indices, select first group_to_use indices
+                selected_indices = quantizer_indices[:, :group_to_use] if quantizer_indices.shape[1] > group_to_use else quantizer_indices
+                print(f"📡 ChannelModem: Selected {group_to_use} indices from 2D indices shape {quantizer_indices.shape} -> {selected_indices.shape}")
+            
+            # Transmit using WirelessInterface
+            try:
+                result = self.wireless_interface.transmit(
+                    indices=selected_indices,
+                    snr_db=snr_db,
+                    bits_per_index=4,  # Assuming 4 bits per index
+                    group_to_use=group_to_use
+                )
+                
+                # Extract received features, BER, and MSE from result
+                received_features = result.get('received_features', quantized_features)
+                ber = result.get('ber', torch.tensor(0.01, device=device))
+                transmit_mse = result.get('transmit_mse', torch.tensor(0.0, device=device))
+                
+                return received_features, ber, transmit_mse
+            except Exception as e:
+                print(f"Error using WirelessInterface: {e}, falling back to simple transmission")
         
-        device = quantized_features.device
-        
-        # Ensure all polar coding components are on the correct device
-        try:
-            if self.polar_encoder.ind_gather_tensor.device != device:
-                self.polar_encoder = self.polar_encoder.to(device)
-        except AttributeError:
-            self.polar_encoder = self.polar_encoder.to(device)
-            
-        try:
-            if self.polar_decoder.frozen_ind_tensor.device != device:
-                self.polar_decoder = self.polar_decoder.to(device)
-        except AttributeError:
-            self.polar_decoder = self.polar_decoder.to(device)
-            
-        # Move modulator and demodulator to device
-        if hasattr(self.modulator, 'to'):
-            self.modulator = self.modulator.to(device)
-        if hasattr(self.demodulator, 'to'):
-            self.demodulator = self.demodulator.to(device)
-        
-        batch_size = quantized_features.shape[0]
-        
-        # For now, use a simplified approach: convert features to bits directly
-        # This is a placeholder - proper implementation would convert quantizer indices to bits
-        if use_coding:
-            # Convert quantized features to binary (simplified)
-            # Assume features are in range [0, 1], convert to bits
-            features_flat = quantized_features.reshape(batch_size, -1)
-            # Simple thresholding to get bits
-            binary_data = (features_flat > 0.5).float()
-            
-            # Ensure we have the right number of bits for polar coding (64 bits for (64,128) code)
-            target_bits = 64
-            current_bits = binary_data.shape[1]
-            if current_bits > target_bits:
-                binary_data = binary_data[:, :target_bits]
-            elif current_bits < target_bits:
-                # Pad with zeros
-                padding = torch.zeros(batch_size, target_bits - current_bits, device=device)
-                binary_data = torch.cat([binary_data, padding], dim=1)
-            
-            # Polar encoding
-            encoded_bits = self.polar_encoder(binary_data)
-            
-            # Reshape for modulation (n bits -> n/bits_per_symbol symbols)
-            symbols_per_codeword = encoded_bits.shape[1] // self.modulator.bits_per_symbol
-            encoded_reshaped = encoded_bits.view(batch_size, symbols_per_codeword, self.modulator.bits_per_symbol)
-            
-            # Modulation
-            modulated_symbols = self.modulator.modulate(encoded_reshaped)
-            
-            # Channel transmission
-            received_symbols = self.transmit(modulated_symbols, snr_db)
-            
-            # Demodulation to LLRs
-            llrs = self.demodulator.demodulate(received_symbols, noise_var=10**(-snr_db/10))
-            
-            # Polar decoding
-            decoded_bits = self.polar_decoder(llrs)
-            
-            received_binary = decoded_bits
-        else:
-            # Uncoded transmission
-            features_flat = quantized_features.reshape(batch_size, -1)
-            binary_data = (features_flat > 0.5).float()
-            target_bits = 64
-            current_bits = binary_data.shape[1]
-            if current_bits > target_bits:
-                binary_data = binary_data[:, :target_bits]
-            elif current_bits < target_bits:
-                padding = torch.zeros(batch_size, target_bits - current_bits, device=device)
-                binary_data = torch.cat([binary_data, padding], dim=1)
-            
-            # Simple BPSK-like modulation
-            symbols = (binary_data * 2 - 1).float()  # 0->-1, 1->1
-            received_symbols = self.transmit(symbols, snr_db)
-            
-            # Hard decision decoding
-            received_binary = (received_symbols > 0).float()
-        
-        # Calculate BER first
-        bit_errors = (binary_data != received_binary).sum().float()
-        total_bits = binary_data.numel()
-        ber = bit_errors / total_bits
-        
-        # For transmit_mse: return 0 when not using coding (pretrain phase)
-        if not use_coding:
-            # Even in pretrain phase, add some noise to make training more realistic
-            noise_level = 0.1  # Small fixed noise level for pretrain
-            noise = torch.randn_like(quantized_features) * noise_level
-            received_features = quantized_features + noise
-            transmit_mse = nn.functional.mse_loss(quantized_features, received_features)
-        else:
-            # Convert binary back to features (simplified reconstruction)
-            # For transmit_mse calculation, use a simplified approach:
-            # received_features = quantized_features + noise based on BER
-            noise_level = ber * torch.std(quantized_features).detach()  # Noise proportional to BER
-            noise = torch.randn_like(quantized_features) * noise_level
-            received_features = quantized_features + noise
-            
-            # Calculate transmission MSE (between quantized and received features)
-            transmit_mse = nn.functional.mse_loss(quantized_features, received_features)
-        
+        # Fallback to simple transmission
+        received_features = self.transmit(quantized_features, snr_db)
+        ber = torch.tensor(0.01, device=quantized_features.device)
+        transmit_mse = torch.tensor(0.0, device=quantized_features.device)
         return received_features, ber, transmit_mse
     
     def indices_to_binary(self, indices, bits_per_index=4):

@@ -55,80 +55,155 @@ def create_argument_parser():
     # ==================== 模型参数 ====================
     parser.add_argument('--intermediate_dim', type=int, default=128,
                         help='Dimension of intermediate representation (feature vector size)')
-    parser.add_argument('--num_classes', type=int, default=10,
-                        help='Number of classification classes')
     
     # ==================== 量化器参数 ====================
     parser.add_argument('--quantizer_dimension', type=int, default=128,
                         help='Dimension for vector quantization')
     parser.add_argument('--quantizer_n_codes_group', type=int, default=8,
                         help='Number of quantization groups')
-    parser.add_argument('--quantizer_bins', type=int, default=256,
+    parser.add_argument('--quantizer_bins', type=int, default=16,
                         help='Codebook size per group')
-    parser.add_argument('--quantizer_n_q', type=int, default=4,
+    parser.add_argument('--quantizer_n_q', type=int, default=32,
                         help='Total number of quantizers')
-    parser.add_argument('--vq_loss_weight', type=float, default=0.1,
-                        help='Weight for VQ commitment loss')
-    parser.add_argument('--epochs', type=int, default=200,
-                        help='Total number of training epochs')
-    parser.add_argument('--batch_size', type=int, default=64,
-                        help='Training batch size')
+    parser.add_argument('--epochs', type=int, default=220, help='Total number of training epochs')
+    parser.add_argument('--batch_size', type=int, default=128, help='Training batch size')
     parser.add_argument('--lr', type=float, default=1e-3,
                         help='Learning rate')
-    parser.add_argument('--lr_step', type=int, default=50,
+    parser.add_argument('--lr_step', type=int, default=20,
                         help='Learning rate scheduler step size')
     parser.add_argument('--lr_gamma', type=float, default=0.5,
                         help='Learning rate scheduler gamma')
 
     # ==================== 三阶段训练参数 ====================
-    parser.add_argument('--pretrain_epochs', type=int, default=80,
-                        help='End epoch for pretraining phase (sender only)')
-    parser.add_argument('--selector_epochs', type=int, default=100,
-                        help='End epoch for joint training phase')
-    parser.add_argument('--final_epochs', type=int, default=120,
-                        help='End epoch for final fine-tuning phase')
+    parser.add_argument('--pretrain_epochs', type=int, default=120,
+                        help='Number of epochs for pretraining phase')
+    parser.add_argument('--selector_epochs', type=int, default=180,
+                        help='Number of epochs for joint training phase')
+    parser.add_argument('--final_epochs', type=int, default=200,
+                        help='Number of epochs for final fine-tuning phase')
 
     # ==================== 信道参数 ====================
-    parser.add_argument('--channel_snr', type=float, default=3.0,
+    parser.add_argument('--channel_snr', type=float, default=10.0,
                         help='Signal-to-Noise Ratio for channel simulation (dB)')
-    parser.add_argument('--snr_min', type=float, default=0.0,
+    parser.add_argument('--snr_min', type=float, default=5.0,
                         help='Minimum SNR for training/testing range (dB)')
-    parser.add_argument('--snr_max', type=float, default=5.0,
+    parser.add_argument('--snr_max', type=float, default=15.0,
                         help='Maximum SNR for training/testing range (dB)')
-    parser.add_argument('--channel_type', type=str, default='awgn',
-                        choices=['awgn', 'rayleigh', 'rician'],
+    parser.add_argument('--test_snr_steps', type=int, default=11, 
+                        help='Number of SNR steps for testing')
+    parser.add_argument('--channel_model', type=str, default='rayleigh',
+                        choices=['awgn', 'rayleigh', 'udp'],
                         help='Channel type for simulation')
 
     # ==================== 训练控制参数 ====================
-    parser.add_argument('--checkpoint_dir', type=str, default="checkpoints",
+    parser.add_argument('--checkpoint_dir', type=str, default="./checkpoints",
                         help='Directory to save checkpoints')
-    parser.add_argument('--seed', type=int, default=42,
+    parser.add_argument('--seed', type=int, default=123,
                         help='Random seed for reproducibility')
-    parser.add_argument('--device', type=str, default=None,
+    parser.add_argument('--device', type=str, default='cuda',
                         help='Device to use (cuda/cpu), auto-detect if None')
 
     # ==================== 模式选择 ====================
     parser.add_argument('--mode', type=str, default='train',
-                        choices=['train', 'test', 'both'],
-                        help='Mode: train, test, or both')
+                        choices=['train', 'test'],
+                        help='Mode: train or test')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume training from')
+    # ==================== 通信模式配置 ====================
+    parser.add_argument('--communication_mode', type=int, default=4, choices=[0, 1, 2, 3, 4],
+                        help='Communication mode: '
+                             '1: Analog transmission (direct Gaussian noise), '
+                             '2: Analog transmission with vector quantization, '
+                             '3: Digital transmission without channel coding, '
+                             '4: Digital transmission with channel coding')
+
+    # ==================== 数字传输参数 (Modes 3,4) ====================
+    parser.add_argument('--bits_per_index', type=int, default=4,
+                        help='Number of bits per quantization index for digital transmission')
+    parser.add_argument('--max_groups', type=int, default=8,
+                        help='Maximum number of groups available for transmission')
+    
+    # 信道编码参数
+    parser.add_argument('--N', type=int, default=128,
+                        help='Polar code length (must be power of 2)')
+    parser.add_argument('--K', type=int, default=64,
+                        help='Information bits for polar coding')
+    parser.add_argument('--channel_type', type=str, default='uplink',
+                        choices=['uplink', 'downlink'],
+                        help='5G polar coding channel type')
+    parser.add_argument('--decoder_type', type=str, default='SC',
+                        choices=['SC', 'SCL'],
+                        help='Polar decoder type')
+    parser.add_argument('--list_size', type=int, default=8,
+                        help='List size for SCL decoder')
+    
+    # 调制参数
+    parser.add_argument('--constellation_type', type=str, default='qam',
+                        choices=['qam', 'bpsk', 'pam'],
+                        help='Constellation type for modulation')
+    parser.add_argument('--normalize', action='store_true', default=True,
+                        help='Whether to normalize constellation to unit power')
+    parser.add_argument('--demapping_method', type=str, default='app',
+                        choices=['app', 'maxlog'],
+                        help='Demapping method for soft decisions')
+
+    # ==================== 自适应组选择器参数 (Modes 3,4) ====================
+    parser.add_argument('--selector_snr_bins', type=int, default=21,
+                        help='Number of SNR bins for adaptive group selector')
+    parser.add_argument('--selector_algorithm', type=str, default='heuristic', 
+                        choices=['heuristic', 'rl'],
+                        help='Adaptive group selector algorithm')
+    parser.add_argument('--fixed_group', type=int, default=None,
+                        help='Fixed number of groups to use (default: None for adaptive selection)')
+
+    # ==================== 无线信道模型参数 ====================
+    parser.add_argument('--equalization_method', type=str, default='mrc',
+                        choices=['identity', 'zf', 'mrc', 'mmse'],
+                        help='Channel equalization method for fading channels')
+    
+    # UDP信道参数
+    parser.add_argument('--udp_tx_host', type=str, default='localhost',
+                        help='UDP transmission host address')
+    parser.add_argument('--udp_tx_port', type=int, default=12345,
+                        help='UDP transmission port')
+    parser.add_argument('--udp_rx_host', type=str, default='localhost',
+                        help='UDP reception host address')
+    parser.add_argument('--udp_rx_port', type=int, default=12346,
+                        help='UDP reception port')
+    parser.add_argument('--udp_timeout', type=float, default=10.0,
+                        help='UDP socket timeout in seconds')
+    parser.add_argument('--udp_buffer_size', type=int, default=8192,
+                        help='UDP buffer size in bytes')
+    parser.add_argument('--udp_max_retries', type=int, default=3,
+                        help='Maximum UDP transmission retries')
+
+    # ==================== 运行模式参数 ====================
+    parser.add_argument('--test_all_modes', action='store_true',
+                        help='Test all communication modes')
+    parser.add_argument('--model_path', type=str, 
+                        help='Path to model weights for testing')
+    parser.add_argument('--verbose', action='store_true',
+                        help='Enable verbose output for debugging')
+
+    # ==================== 重要性阈值参数 ====================
+    parser.add_argument('--threshold', type=float, default=0.0,
+                        help='Importance threshold for feature selection')
+    
+    # ==================== 输出目录参数 ====================
+    parser.add_argument('--output_dir', type=str, default='./outputs',
+                        help='Base output directory for results')
+
+    # ==================== 文件路径参数 ====================
+    parser.add_argument('--results_dir', type=str, default='./results',
+                        help='Directory for saving test results')
 
     return parser
 
 
 def setup_device(device_str):
     """Setup torch device."""
-    if device_str is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(device_str)
-
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    if device.type == 'cuda':
-        print(f"CUDA device: {torch.cuda.get_device_name(device)}")
-        print(f"CUDA memory: {torch.cuda.get_device_properties(device).total_memory / 1024**3:.1f} GB")
-
     return device
 
 
@@ -167,23 +242,18 @@ def train_model(args):
     print("="*60)
 
     # Setup
-    device = setup_device(args.device)
+    device = setup_device(None)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-
-    # Create models
-    sender_model = SenderNet(args).to(device)
-    receiver_model = ReceiverNet(args, args.num_classes).to(device)
-    quantizer = VibrationVectorQuantizer(args).to(device)
-    channel_modem = ChannelModem(args)
 
     # Create data loaders
     train_loader, test_loader, num_classes = create_data_loaders(args)
 
-    # Update args.num_classes if it was auto-detected
-    if hasattr(args, 'num_classes') and args.num_classes != num_classes:
-        print(f"Auto-detected {num_classes} classes from dataset")
-        args.num_classes = num_classes
+    # Create models
+    sender_model = SenderNet(args).to(device)
+    receiver_model = ReceiverNet(args, num_classes).to(device)
+    quantizer = VibrationVectorQuantizer(args).to(device)
+    channel_modem = ChannelModem(args)
 
     # Resume from checkpoint if specified
     if args.resume:
@@ -246,7 +316,6 @@ def main():
     print("DHSCC Split End-to-End System")
     print(f"Mode: {args.mode}")
     print(f"Intermediate dim: {args.intermediate_dim}")
-    print(f"Classes: {args.num_classes}")
     print(f"Channel SNR: {args.channel_snr}dB")
 
     if args.mode in ['train', 'both']:

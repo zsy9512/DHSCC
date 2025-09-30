@@ -269,10 +269,23 @@ def train_end_to_end(sender_model, receiver_model, quantizer, channel_modem, tra
             
             # Use channel_modem for transmission with polar coding integration (all phases)
             if hasattr(channel_modem, 'transmit_with_polar_coding'):
+                # Set group_to_use based on phase (adaptive selection simulation)
+                if phase == 'pretrain':
+                    group_to_use = 8  # Use all groups in pretrain
+                elif phase == 'selector':
+                    group_to_use = 6  # Reduce groups in selector phase
+                    if batch_idx == 0:  # Only print for first batch of each epoch
+                        print(f"🔄 SELECTOR PHASE: Using {group_to_use} groups out of {quantizer_indices.shape[1]} available")
+                        print(f"   Quantizer indices shape: {quantizer_indices.shape}")
+                        print(f"   SNR: {snr_db:.1f}dB, Use coding: {use_coding}")
+                else:  # final
+                    group_to_use = 4  # Minimal groups in final phase
+                
                 received_features, ber, transmit_mse = channel_modem.transmit_with_polar_coding(
                     quantized_features, quantizer_indices, 
                     snr_db=snr_db,
-                    use_coding=use_coding
+                    use_coding=use_coding,
+                    group_to_use=group_to_use
                 )
             else:
                 # Fallback: simple transmission without proper coding
@@ -414,7 +427,8 @@ def validate_end_to_end(sender_model, receiver_model, quantizer, channel_modem, 
                     received_features, ber, transmit_mse = channel_modem.transmit_with_polar_coding(
                         quantized_features, quantizer_indices, 
                         snr_db=snr_db,
-                        use_coding=use_coding
+                        use_coding=use_coding,
+                        group_to_use=8  # Default for validation
                     )
                 else:
                     # Fallback: simple transmission

@@ -249,7 +249,7 @@ def generate_5g_ranking(k, n, sort=True):
             positions.
     """
     # Load 5G polar ranking table
-    polar_5g_path = "../../wireless_comm/polar_5G.csv"
+    polar_5g_path = "polar_5G.csv"
     try:
         polar_5g = np.loadtxt(polar_5g_path, delimiter=';', dtype=int)
     except:
