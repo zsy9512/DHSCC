@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 from scipy.special import comb
 
 # Import CRC encoder/decoder from crc.py
-from wireless_comm.crc import CRCEncoder, CRCDecoder
+from .crc import CRCEncoder, CRCDecoder
 
 class PolarEncoder(torch.nn.Module):
     """Polar encoder for given code parameters.

@@ -423,7 +423,7 @@ class Polar5GDecoder(torch.nn.Module):
                  dtype=torch.float32):
         super().__init__()
 
-        from wireless_comm.polar_encoding import Polar5GEncoder
+        from ..wireless_comm.polar_encoding import Polar5GEncoder
         
         if not isinstance(enc_polar, Polar5GEncoder):
             raise TypeError("enc_polar must be Polar5GEncoder.")
@@ -849,7 +849,7 @@ class PolarSCLDecoder(torch.nn.Module):
             self._use_crc = True
             # Import CRCEncoder and CRCDecoder implementation
             try:
-                from wireless_comm.crc import CRCEncoder, CRCDecoder
+                from ..wireless_comm.crc import CRCEncoder, CRCDecoder
                 self._crc_encoder = CRCEncoder(crc_degree, dtype=dtype)
                 self._crc_decoder = CRCDecoder(self._crc_encoder, dtype=dtype)
                 self._k_crc = self._crc_decoder.encoder.crc_length
