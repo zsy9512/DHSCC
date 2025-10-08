@@ -83,15 +83,15 @@ def create_argument_parser():
                         help='Number of epochs for final fine-tuning phase')
 
     # ==================== 信道参数 ====================
-    parser.add_argument('--channel_snr', type=float, default=10.0,
+    parser.add_argument('--channel_snr', type=float, default=15.0,
                         help='Signal-to-Noise Ratio for channel simulation (dB)')
-    parser.add_argument('--snr_min', type=float, default=5.0,
+    parser.add_argument('--snr_min', type=float, default=10.0,
                         help='Minimum SNR for training/testing range (dB)')
-    parser.add_argument('--snr_max', type=float, default=15.0,
+    parser.add_argument('--snr_max', type=float, default=20.0,
                         help='Maximum SNR for training/testing range (dB)')
     parser.add_argument('--test_snr_steps', type=int, default=11, 
                         help='Number of SNR steps for testing')
-    parser.add_argument('--channel_model', type=str, default='rayleigh',
+    parser.add_argument('--channel_model', type=str, default='awgn',
                         choices=['awgn', 'rayleigh', 'udp'],
                         help='Channel type for simulation')
 

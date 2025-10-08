@@ -416,7 +416,15 @@ class Polar5GDecoder(torch.nn.Module):
                  dtype=torch.float32):
         super().__init__()
 
-        from .polar_encoding import Polar5GEncoder
+        # Import Polar5GEncoder with absolute import to avoid relative import issues
+        try:
+            from ..sender.polar_encoding import Polar5GEncoder
+        except ImportError:
+            # Fallback to absolute import
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from sender.polar_encoding import Polar5GEncoder
         
         if not isinstance(enc_polar, Polar5GEncoder):
             raise TypeError("enc_polar must be Polar5GEncoder.")
