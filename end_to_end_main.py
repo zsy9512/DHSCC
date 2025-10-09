@@ -28,7 +28,7 @@ from sender.sender_model import SenderNet
 from receiver.receiver_model import ReceiverNet
 from sender.quantizer import VibrationVectorQuantizer
 from channel.channel_modem import ChannelModem
-from train_end_to_end import train_end_to_end
+from train_combined import train_direct_polar, train_two_stage
 from end_to_end_test import run_end_to_end_tests
 
 # Import data utilities from parent directory
@@ -65,7 +65,7 @@ def create_argument_parser():
                         help='Codebook size per group')
     parser.add_argument('--quantizer_n_q', type=int, default=32,
                         help='Total number of quantizers')
-    parser.add_argument('--epochs', type=int, default=220, help='Total number of training epochs')
+    parser.add_argument('--epochs', type=int, default=120, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=128, help='Training batch size')
     parser.add_argument('--lr', type=float, default=1e-3,
                         help='Learning rate')
@@ -75,9 +75,9 @@ def create_argument_parser():
                         help='Learning rate scheduler gamma')
 
     # ==================== 三阶段训练参数 ====================
-    parser.add_argument('--pretrain_epochs', type=int, default=120,
+    parser.add_argument('--pretrain_epochs', type=int, default=20,
                         help='Number of epochs for pretraining phase')
-    parser.add_argument('--selector_epochs', type=int, default=180,
+    parser.add_argument('--selector_epochs', type=int, default=40,
                         help='Number of epochs for joint training phase')
     parser.add_argument('--final_epochs', type=int, default=200,
                         help='Number of epochs for final fine-tuning phase')
@@ -117,6 +117,13 @@ def create_argument_parser():
                              '3: Digital transmission without channel coding, '
                              '4: Digital transmission with channel coding')
 
+    # ==================== 训练模式配置 ====================
+    parser.add_argument('--training_mode', type=str, default='direct_polar',
+                        choices=['direct_polar', 'two_stage'],
+                        help='Training mode: '
+                             'direct_polar: Direct training with polar coding, '
+                             'two_stage: First train without polar coding, then with polar coding')
+
     # ==================== 数字传输参数 (Modes 3,4) ====================
     parser.add_argument('--bits_per_index', type=int, default=4,
                         help='Number of bits per quantization index for digital transmission')
@@ -124,9 +131,9 @@ def create_argument_parser():
                         help='Maximum number of groups available for transmission')
     
     # 信道编码参数
-    parser.add_argument('--N', type=int, default=128,
+    parser.add_argument('--N', type=int, default=256,
                         help='Polar code length (must be power of 2)')
-    parser.add_argument('--K', type=int, default=64,
+    parser.add_argument('--K', type=int, default=128,
                         help='Information bits for polar coding')
     parser.add_argument('--channel_type', type=str, default='uplink',
                         choices=['uplink', 'downlink'],
@@ -240,6 +247,7 @@ def train_model(args):
     print("\n" + "="*60)
     print("STARTING END-TO-END TRAINING")
     print("="*60)
+    print(f"Training mode: {args.training_mode}")
 
     # Setup
     device = setup_device(None)
@@ -249,34 +257,71 @@ def train_model(args):
     # Create data loaders
     train_loader, test_loader, num_classes = create_data_loaders(args)
 
-    # Create models
-    sender_model = SenderNet(args).to(device)
-    receiver_model = ReceiverNet(args, num_classes).to(device)
-    quantizer = VibrationVectorQuantizer(args).to(device)
-    channel_modem = ChannelModem(args)
+    if args.training_mode == 'direct_polar':
+        # Direct training with polar coding
+        print("Using direct polar coding training...")
+        
+        # Create models
+        sender_model = SenderNet(args).to(device)
+        receiver_model = ReceiverNet(args, num_classes).to(device)
+        quantizer = VibrationVectorQuantizer(args).to(device)
+        channel_modem = ChannelModem(args)
 
-    # Resume from checkpoint if specified
-    if args.resume:
-        sender_optimizer = torch.optim.Adam(sender_model.parameters(), lr=args.lr)
-        receiver_optimizer = torch.optim.Adam(receiver_model.parameters(), lr=args.lr)
-        start_epoch = load_checkpoint(args.resume, sender_model, receiver_model, quantizer, sender_optimizer, receiver_optimizer)
-        print(f"Resuming training from epoch {start_epoch}")
-    else:
-        sender_optimizer = None
-        receiver_optimizer = None
-        start_epoch = 0
+        # Resume from checkpoint if specified
+        if args.resume:
+            sender_optimizer = torch.optim.Adam(sender_model.parameters(), lr=args.lr)
+            receiver_optimizer = torch.optim.Adam(receiver_model.parameters(), lr=args.lr)
+            start_epoch = load_checkpoint(args.resume, sender_model, receiver_model, quantizer, sender_optimizer, receiver_optimizer)
+            print(f"Resuming training from epoch {start_epoch}")
+        else:
+            sender_optimizer = None
+            receiver_optimizer = None
+            start_epoch = 0
 
-    # Train the model
-    results = train_end_to_end(
-        sender_model=sender_model,
-        receiver_model=receiver_model,
-        quantizer=quantizer,
-        channel_modem=channel_modem,
-        train_loader=train_loader,
-        device=device,
-        args=args,
-        test_loader=test_loader
-    )
+        # Train the model with polar coding
+        results = train_direct_polar(
+            sender_model=sender_model,
+            receiver_model=receiver_model,
+            quantizer=quantizer,
+            channel_modem=channel_modem,
+            train_loader=train_loader,
+            device=device,
+            args=args,
+            test_loader=test_loader
+        )
+
+    elif args.training_mode == 'two_stage':
+        # Two-stage training: first without polar coding, then with polar coding
+        print("Using two-stage training...")
+        
+        # Create models for two-stage training
+        sender_model = SenderNet(args).to(device)
+        receiver_model = ReceiverNet(args, num_classes).to(device)
+        quantizer = VibrationVectorQuantizer(args).to(device)
+        channel_modem = ChannelModem(args)
+
+        # Resume from checkpoint if specified
+        if args.resume:
+            sender_optimizer = torch.optim.Adam(sender_model.parameters(), lr=args.lr)
+            receiver_optimizer = torch.optim.Adam(receiver_model.parameters(), lr=args.lr)
+            start_epoch = load_checkpoint(args.resume, sender_model, receiver_model, quantizer, sender_optimizer, receiver_optimizer)
+            print(f"Resuming training from epoch {start_epoch}")
+        else:
+            sender_optimizer = None
+            receiver_optimizer = None
+            start_epoch = 0
+
+        # Train using two-stage approach
+        results = train_two_stage(
+            sender_model=sender_model,
+            receiver_model=receiver_model,
+            quantizer=quantizer,
+            channel_modem=channel_modem,
+            train_loader=train_loader,
+            device=device,
+            args=args,
+            test_loader=test_loader
+        )
 
     print("\n" + "="*60)
     print("TRAINING COMPLETED")
@@ -315,6 +360,8 @@ def main():
 
     print("DHSCC Split End-to-End System")
     print(f"Mode: {args.mode}")
+    print(f"Training mode: {args.training_mode}")
+    print(f"Communication mode: {args.communication_mode}")
     print(f"Intermediate dim: {args.intermediate_dim}")
     print(f"Channel SNR: {args.channel_snr}dB")
 

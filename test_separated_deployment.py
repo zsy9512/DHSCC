@@ -12,10 +12,10 @@ import torch
 import numpy as np
 
 def test_end_to_end_separated_deployment():
-    """测试分离部署的完整端到端功能"""
+    """测试分离部署的完整端到端性能评估"""
 
     # 设置模型路径
-    checkpoint_dir = "checkpoints/end_to_end_training_20251008_155040"
+    checkpoint_dir = "checkpoints/end_to_end_training_20251009_091255"
     sender_model_path = os.path.join(checkpoint_dir, "final_sender_model.pth")
     receiver_model_path = os.path.join(checkpoint_dir, "final_receiver_model.pth")
     quantizer_path = os.path.join(checkpoint_dir, "final_quantizer.pth")
@@ -29,8 +29,8 @@ def test_end_to_end_separated_deployment():
     print("✓ 找到所有模型文件")
 
     # 创建进程间通信队列
-    sender_to_channel = mp.Queue(maxsize=10)
-    channel_to_receiver = mp.Queue(maxsize=10)
+    sender_to_channel = mp.Queue(maxsize=50)  # 更大的队列
+    channel_to_receiver = mp.Queue(maxsize=50)
 
     print("✓ 创建了通信队列")
 
@@ -66,9 +66,9 @@ def test_end_to_end_separated_deployment():
 
     # 等待所有进程完成
     print("等待进程完成...")
-    sender_process.join(timeout=60)
-    channel_process.join(timeout=60)
-    receiver_process.join(timeout=60)
+    sender_process.join(timeout=120)  # 更长的超时时间
+    channel_process.join(timeout=120)
+    receiver_process.join(timeout=120)
 
     # 检查进程状态
     processes_alive = []
@@ -88,7 +88,7 @@ def test_end_to_end_separated_deployment():
         print(f"警告：以下进程仍在运行: {', '.join(processes_alive)}")
         return False
 
-    print("✓ 端到端测试完成")
+    print("✓ 端到端性能测试完成")
     return True
 
 def run_receiver_process(input_queue, model_path, checkpoint_dir):
@@ -105,10 +105,10 @@ def run_receiver_process(input_queue, model_path, checkpoint_dir):
         sys.argv = [
             'receiver_process.py',
             '--mode', 'test',
-            '--max_batches', '2',  # 只处理2个批次进行测试
+            '--max_batches', '10',  # 处理10个批次进行性能评估
             '--receiver_model_path', model_path,
             '--checkpoint_dir', checkpoint_dir,
-            '--batch_size', '32'  # 小批量以加快测试
+            '--batch_size', '32'  # 更大的批次大小
         ]
 
         # 调用接收端的主函数
@@ -133,7 +133,7 @@ def run_channel_process(input_queue, output_queue):
         import sys
 
         # 设置命令行参数
-        sys.argv = ['channel_process.py', '--channel_snr', '18.0', '--K', '128']
+        sys.argv = ['channel_process.py', '--channel_snr', '18.0', '--K', '128', '--N', '256', '--channel_model', 'awgn']
 
         # 调用信道的主函数
         channel_process.channel_process(
@@ -161,11 +161,12 @@ def run_sender_process(output_queue, model_path, quantizer_path, checkpoint_dir)
         sys.argv = [
             'sender_process.py',
             '--mode', 'test',
-            '--max_batches', '1',  # 只处理1个批次进行调试
+            '--max_batches', '10',  # 处理10个批次进行性能评估
             '--sender_model_path', model_path,
             '--quantizer_path', quantizer_path,
             '--checkpoint_dir', checkpoint_dir,
-            '--batch_size', '1'  # 小批量以便调试
+            '--batch_size', '32',  # 更大的批次大小
+            '--group_to_use', '8'  # 使用8个组，与训练最终阶段一致
         ]
 
         # 调用发送端的主函数
@@ -181,12 +182,12 @@ def run_sender_process(output_queue, model_path, quantizer_path, checkpoint_dir)
         traceback.print_exc()
 
 if __name__ == "__main__":
-    print("开始端到端分离部署测试...")
-    print("这将测试实际的数据流通过三个进程")
+    print("开始端到端分离部署性能测试...")
+    print("这将测试实际的数据流通过三个进程，并评估分类性能")
     success = test_end_to_end_separated_deployment()
     if success:
-        print("✓ 分离部署端到端测试成功！")
-        print("三个进程可以正确通信并处理数据")
+        print("✓ 分离部署端到端性能测试成功！")
+        print("检查上述输出以查看分类准确率")
     else:
-        print("✗ 分离部署端到端测试失败")
+        print("✗ 分离部署端到端性能测试失败")
         sys.exit(1)

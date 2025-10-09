@@ -24,7 +24,11 @@ import torch
 import torch.nn as nn
 import numpy as np
 from typing import Dict, Tuple, Optional, Union, Callable
-from .system_integration import WirelessCommunicationSystem
+try:
+    from .system_integration import WirelessCommunicationSystem
+except ImportError:
+    # Fallback for absolute import
+    from channel.system_integration import WirelessCommunicationSystem
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -170,13 +174,12 @@ class WirelessInterface:
         # Multiple coded systems for different payload sizes (adaptive transmission)
         # This matches the original WirelessCodec logic: k = self.k - i*16
         self.adaptive_systems = []
-        for i in range(13):
-            # Calculate adaptive payload size (same as original implementation)
-            #adaptive_k = kwargs['k'] - i * 16
-            adaptive_k = 128-  (i+2)* 8
-            print(f"Adaptive polar code system {i}: k={adaptive_k}, n={kwargs['n']}, k={kwargs['k']},, rate={adaptive_k / kwargs['n']:.3f}")
+        for i in range(8):  # 8 adaptive systems
+            # Calculate adaptive payload size: start from k=128, decrease by 16 each time
+            adaptive_k = kwargs['k'] - i * 16
+            print(f"Adaptive polar code system {i}: k={adaptive_k}, n={kwargs['n']}, rate={adaptive_k / kwargs['n']:.3f}")
             # Skip if k becomes too small (maintain minimum viable code rate)
-            if adaptive_k < 8: #16
+            if adaptive_k < 16:
                 if kwargs.get('verbose', False):
                     print(f"Skipping adaptive system {i}: k={adaptive_k} too small")
                 continue
@@ -556,10 +559,13 @@ class WirelessInterface:
         Returns:
             Transmission results dictionary
         """
+        # Extract use_coding parameter from kwargs
+        use_coding = kwargs.get('use_coding', True)  # Default to True for backward compatibility
+        
         if self.comm_mode == 3:
             return self.transmit_mode3(indices, snr_db, bits_per_index, group_to_use)
         elif self.comm_mode == 4:
-            return self.transmit_mode4(indices, snr_db, bits_per_index, group_to_use)
+            return self.transmit_mode4(indices, snr_db, bits_per_index, group_to_use, use_coding=use_coding)
         else:
             raise ValueError(f"Digital transmission not supported for mode {self.comm_mode}")
     
@@ -768,8 +774,8 @@ def create_wireless_interface(args) -> WirelessInterface:
     
     interface = WirelessInterface(
         comm_mode=getattr(args, 'communication_mode', 4),  # 使用正确的参数名
-        n=getattr(args, 'polar_n', 128),  # 修正参数名
-        k=getattr(args, 'polar_k', 64),  # 修正参数名
+        n=getattr(args, 'N', 256),  # 使用正确的参数名N
+        k=getattr(args, 'K', 128),  # 使用正确的参数名K
         #k=getattr(args, 'polar_k', 240),  # 修正参数名
         channel_type=getattr(args, 'channel_type', 'uplink'),
         decoder_type=getattr(args, 'decoder_type', 'SC'),

@@ -48,7 +48,6 @@ def indices_to_binary(indices, bits_per_index=4):
 
 def load_sender_models(args, device):
     """Load trained sender model and quantizer."""
-    print("🔄 Loading sender models...")
 
     # Create models
     sender_model = SenderNet(args).to(device)
@@ -64,14 +63,10 @@ def load_sender_models(args, device):
         matching_files = glob.glob(sender_model_path)
         if matching_files:
             sender_model_path = max(matching_files, key=os.path.getctime)
-            print(f"📂 Found sender model: {sender_model_path}")
 
     if sender_model_path and os.path.exists(sender_model_path):
         sender_checkpoint = torch.load(sender_model_path, map_location=device)
         sender_model.load_state_dict(sender_checkpoint['state_dict'])
-        print(f"✅ Loaded sender model from {sender_model_path}")
-    else:
-        print("⚠️  Sender model not found, using randomly initialized model")
 
     # Load quantizer
     quantizer_path = getattr(args, 'quantizer_path', None)
@@ -83,14 +78,10 @@ def load_sender_models(args, device):
         matching_files = glob.glob(quantizer_path)
         if matching_files:
             quantizer_path = max(matching_files, key=os.path.getctime)
-            print(f"📂 Found quantizer: {quantizer_path}")
 
     if quantizer_path and os.path.exists(quantizer_path):
         quantizer_checkpoint = torch.load(quantizer_path, map_location=device)
         quantizer.load_state_dict(quantizer_checkpoint['state_dict'])
-        print(f"✅ Loaded quantizer from {quantizer_path}")
-    else:
-        print("⚠️  Quantizer not found, using randomly initialized quantizer")
 
     sender_model.eval()
     quantizer.eval()
@@ -100,13 +91,9 @@ def load_sender_models(args, device):
 
 def sender_process(args, to_channel_queue, from_channel_queue=None):
     """Main sender process function."""
-    print("\n" + "="*50)
-    print("SENDER PROCESS STARTED")
-    print("="*50)
 
     # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"📱 Sender using device: {device}")
 
     # Load models
     sender_model, quantizer = load_sender_models(args, device)
@@ -114,8 +101,6 @@ def sender_process(args, to_channel_queue, from_channel_queue=None):
     # Create data loader
     train_loader, test_loader, num_classes = create_data_loaders_from_args(args)
     data_loader = test_loader if args.mode == 'test' else train_loader
-
-    print(f"📊 Data loader created with {len(data_loader)} batches")
 
     # Process data
     total_samples = 0
@@ -127,8 +112,6 @@ def sender_process(args, to_channel_queue, from_channel_queue=None):
             batch_size = data.size(0)
             total_samples += batch_size
 
-            print(f"🔄 Processing batch {batch_idx + 1}, size: {batch_size}")
-
             # Generate channel noise (same as training)
             channel_noise = torch.randn(batch_size, 1).to(device) * 0.1 + 1.0
 
@@ -139,8 +122,17 @@ def sender_process(args, to_channel_queue, from_channel_queue=None):
             # Quantize features
             quantized_features, quantizer_indices, vq_loss = quantizer.encode(features)
 
+            # Adaptive group selection (same as training final phase)
+            group_to_use = getattr(args, 'group_to_use', 4)  # Default to 4 groups for final phase
+            if len(quantizer_indices.shape) == 3:
+                # Shape: [batch_size, n_groups, group_size]
+                selected_indices = quantizer_indices[:, :group_to_use, :]
+            else:
+                # Shape: [batch_size, total_indices] - select first group_to_use indices
+                selected_indices = quantizer_indices[:, :group_to_use] if quantizer_indices.shape[1] > group_to_use else quantizer_indices
+
             # Convert indices to binary for transmission
-            binary_bits = indices_to_binary(quantizer_indices, bits_per_index=args.bits_per_index)
+            binary_bits = indices_to_binary(selected_indices, bits_per_index=args.bits_per_index)
 
             # Convert to CPU for IPC (channel process uses CPU)
             binary_bits_cpu = binary_bits.detach().cpu().numpy()
@@ -157,7 +149,6 @@ def sender_process(args, to_channel_queue, from_channel_queue=None):
             }
 
             # Send to channel process
-            print(f"📤 Sending batch {batch_idx + 1} to channel process ({binary_bits_cpu.shape} bits)")
             to_channel_queue.put(data_packet)
 
             processed_batches += 1
@@ -168,7 +159,6 @@ def sender_process(args, to_channel_queue, from_channel_queue=None):
 
     # Send end signal
     to_channel_queue.put({'type': 'end'})
-    print(f"✅ Sender process completed. Processed {processed_batches} batches, {total_samples} samples.")
 
 
 def create_sender_args():
@@ -191,6 +181,7 @@ def create_sender_args():
     # Communication parameters
     parser.add_argument('--bits_per_index', type=int, default=4)
     parser.add_argument('--max_groups', type=int, default=8)
+    parser.add_argument('--group_to_use', type=int, default=8, help='Number of groups to transmit')
 
     # Model paths
     parser.add_argument('--sender_model_path', type=str, help='Path to sender model weights')

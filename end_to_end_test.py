@@ -43,15 +43,16 @@ def calculate_ber(original_bits, decoded_bits):
     return errors / total_bits if total_bits > 0 else 0.0
 
 
-def test_end_to_end_system(sender_model, receiver_model, channel_modem, test_data, device, snr_range=None):
+def test_end_to_end_system(sender_model, receiver_model, quantizer, channel_modem, test_data, device, snr_range=None):
     """
     Test the complete end-to-end system performance.
 
     Args:
         sender_model: Trained SenderNet model
         receiver_model: Trained ReceiverNet model
+        quantizer: Trained VibrationVectorQuantizer
         channel_modem: ChannelModem instance
-        test_data: Tuple of (data, labels)
+        test_data: DataLoader or tuple of (data, labels)
         device: torch.device
         snr_range: List of SNR values to test
 
@@ -64,9 +65,6 @@ def test_end_to_end_system(sender_model, receiver_model, channel_modem, test_dat
     sender_model.eval()
     receiver_model.eval()
 
-    data, labels = test_data
-    data, labels = data.to(device), labels.to(device)
-
     results = {
         'snr': [],
         'accuracy': [],
@@ -76,40 +74,98 @@ def test_end_to_end_system(sender_model, receiver_model, channel_modem, test_dat
 
     with torch.no_grad():
         for snr in tqdm(snr_range, desc="Testing SNR levels"):
-            # Set channel SNR
-            # channel_modem.set_snr(snr)  # Not needed, snr passed to transmit
+            total_loss = 0.0
+            total_acc = 0.0
+            total_ber = 0.0
+            total_samples = 0
 
-            # Forward pass through sender
-            batch_size = data.size(0)
-            channel_noise = torch.randn(batch_size, 1).to(device) * 0.1 + 1.0
-            sender_output = sender_model(data, channel_noise)
+            # Handle both DataLoader and (data, labels) tuple
+            if isinstance(test_data, torch.utils.data.DataLoader):
+                # Use DataLoader
+                for data, target in test_data:
+                    data, target = data.to(device), target.to(device)
+                    batch_size = data.size(0)
+                    total_samples += batch_size
 
-            # Transmit through channel
-            encoded_features, importance_weights, pre_task_logits, feature_shape, original_encoded_features = sender_output
-            transmitted_signal = channel_modem.transmit(encoded_features, snr)
+                    batch_results = _test_batch(sender_model, receiver_model, quantizer, channel_modem, data, target, snr, device)
+                    total_loss += batch_results['loss'] * batch_size
+                    total_acc += batch_results['acc'] * batch_size
+                    total_ber += batch_results['ber'] * batch_size
+            else:
+                # Use (data, labels) tuple
+                data, labels = test_data
+                batch_size = data.size(0)
+                total_samples += batch_size
 
-            # Receive and decode
-            receiver_input = transmitted_signal  # transmit already returns received signal
-            receiver_output = receiver_model(receiver_input, snr, feature_shape)
+                batch_results = _test_batch(sender_model, receiver_model, quantizer, channel_modem, data, labels, snr, device)
+                total_loss += batch_results['loss'] * batch_size
+                total_acc += batch_results['acc'] * batch_size
+                total_ber += batch_results['ber'] * batch_size
 
-            # Calculate metrics
-            predictions = receiver_output.argmax(dim=1)
-            accuracy = (predictions == labels).float().mean().item() * 100
-
-            loss = nn.CrossEntropyLoss()(receiver_output, labels).item()
-
-            # Calculate BER (simplified - compare quantized features)
-            # In practice, you'd compare the actual transmitted bits
-            ber = 0.01  # Placeholder - implement proper BER calculation
+            # Average metrics
+            avg_loss = total_loss / total_samples
+            avg_acc = total_acc / total_samples
+            avg_ber = total_ber / total_samples
 
             results['snr'].append(snr)
-            results['accuracy'].append(accuracy)
-            results['ber'].append(ber)
-            results['loss'].append(loss)
+            results['accuracy'].append(avg_acc)
+            results['ber'].append(avg_ber)
+            results['loss'].append(avg_loss)
 
-            print(f"SNR {snr}dB - Accuracy: {accuracy:.2f}%, BER: {ber:.6f}, Loss: {loss:.4f}")
+            print(f"SNR {snr}dB - Accuracy: {avg_acc:.2f}%, BER: {avg_ber:.6f}, Loss: {avg_loss:.4f}")
 
     return results
+
+
+def _test_batch(sender_model, receiver_model, quantizer, channel_modem, data, labels, snr, device):
+    """Test a single batch of data."""
+    # Forward pass through sender
+    batch_size = data.size(0)
+    channel_noise = torch.randn(batch_size, 1).to(device) * 0.1 + 1.0
+    sender_output = sender_model(data, channel_noise)
+
+    # Quantize features for transmission
+    encoded_features, importance_weights, pre_task_logits, feature_shape, original_encoded_features = sender_output
+    quantized_features, quantizer_indices, vq_loss = quantizer.encode(encoded_features)
+
+    # Ensure quantizer_indices are on the same device as other tensors
+    quantizer_indices = quantizer_indices.to(device)
+
+    # Use channel_modem for transmission with polar coding integration
+    if hasattr(channel_modem, 'transmit_with_polar_coding'):
+        # Use all 8 groups with polar coding + QPSK (same as training)
+        group_to_use = 8
+        received_features, ber, transmit_mse = channel_modem.transmit_with_polar_coding(
+            quantized_features, quantizer_indices,
+            snr_db=snr,
+            use_coding=True,  # Enable polar coding for testing
+            group_to_use=group_to_use,
+            quantizer=quantizer
+        )
+    else:
+        # Fallback: simple transmission without proper coding
+        received_features = channel_modem.transmit(quantized_features, snr)
+        ber = torch.tensor(0.01, device=device)  # Placeholder BER
+        transmit_mse = torch.tensor(0.0, device=device)
+
+    # Receiver processing
+    receiver_output = receiver_model(received_features, channel_noise, feature_shape)
+
+    # Calculate metrics
+    predictions = receiver_output.argmax(dim=1)
+    accuracy = (predictions == labels).float().mean().item() * 100
+
+    loss = nn.CrossEntropyLoss()(receiver_output, labels).item()
+
+    # Convert BER to scalar if it's a tensor
+    if isinstance(ber, torch.Tensor):
+        ber = ber.item()
+
+    return {
+        'loss': loss,
+        'acc': accuracy,
+        'ber': ber
+    }
 
 
 def test_modulation_demodulation_ber(modulator, demodulator, polar_encoder, polar_decoder, device, snr_range=None):
@@ -152,10 +208,14 @@ def test_modulation_demodulation_ber(modulator, demodulator, polar_encoder, pola
         noisy_signal = modulated_signal + noise
 
         # Demodulate
-        demodulated_llr = demodulator.demodulate(noisy_signal)
+        demodulated_llr = demodulator.demapper(noisy_signal, noise_var)
+        
+        # Flatten LLRs for polar decoding
+        # Shape: [batch, num_symbols, bits_per_symbol] -> [batch, num_symbols * bits_per_symbol]
+        demodulated_llr_flat = demodulated_llr.view(demodulated_llr.shape[0], -1)
 
         # Decode with polar decoder
-        decoded_bits = polar_decoder(demodulated_llr)
+        decoded_bits = polar_decoder(demodulated_llr_flat)
 
         # Calculate BER
         ber = calculate_ber(original_bits, decoded_bits)
@@ -168,7 +228,7 @@ def test_modulation_demodulation_ber(modulator, demodulator, polar_encoder, pola
     return ber_results
 
 
-def run_end_to_end_tests():
+def run_end_to_end_tests(checkpoint_dir=None, test_loader=None):
     """Run comprehensive end-to-end tests."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -178,24 +238,91 @@ def run_end_to_end_tests():
         def __init__(self):
             self.intermediate_dim = 128
             self.num_classes = 10
+            self.quantizer_dimension = 128
+            self.quantizer_n_codes_group = 8
+            self.quantizer_bins = 16
+            self.quantizer_n_q = 32
 
     args = ModelArgs()
 
     # Initialize models
     sender_model = SenderNet(args).to(device)
     receiver_model = ReceiverNet(args, args.num_classes).to(device)
+    quantizer = VibrationVectorQuantizer(
+        dimension=args.quantizer_dimension,
+        n_codes_group=args.quantizer_n_codes_group,
+        bins=args.quantizer_bins,
+        n_q=args.quantizer_n_q
+    ).to(device)
     channel_modem = ChannelModem(args)
+
+    # Load trained model weights if checkpoint directory is provided
+    if checkpoint_dir:
+        print(f"📁 Loading models from checkpoint: {checkpoint_dir}")
+        try:
+            # Load sender model
+            sender_path = os.path.join(checkpoint_dir, "final_sender_model.pth")
+            if os.path.exists(sender_path):
+                checkpoint = torch.load(sender_path, map_location=device)
+                # Handle both formats: direct state_dict or dict with 'state_dict' key
+                if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+                    sender_model.load_state_dict(checkpoint['state_dict'])
+                else:
+                    # Assume checkpoint is the state_dict directly
+                    sender_model.load_state_dict(checkpoint)
+                print("✓ Loaded sender model")
+            else:
+                print("⚠️  Sender model not found, using random weights")
+
+            # Load receiver model
+            receiver_path = os.path.join(checkpoint_dir, "final_receiver_model.pth")
+            if os.path.exists(receiver_path):
+                checkpoint = torch.load(receiver_path, map_location=device)
+                # Handle both formats: direct state_dict or dict with 'state_dict' key
+                if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+                    receiver_model.load_state_dict(checkpoint['state_dict'])
+                else:
+                    # Assume checkpoint is the state_dict directly
+                    receiver_model.load_state_dict(checkpoint)
+                print("✓ Loaded receiver model")
+            else:
+                print("⚠️  Receiver model not found, using random weights")
+
+            # Load quantizer
+            quantizer_path = os.path.join(checkpoint_dir, "final_quantizer.pth")
+            if os.path.exists(quantizer_path):
+                checkpoint = torch.load(quantizer_path, map_location=device)
+                # Handle both formats: direct state_dict or dict with 'state_dict' key
+                if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+                    quantizer.load_state_dict(checkpoint['state_dict'])
+                else:
+                    # Assume checkpoint is the state_dict directly
+                    quantizer.load_state_dict(checkpoint)
+                print("✓ Loaded quantizer")
+            else:
+                print("⚠️  Quantizer not found, using random weights")
+
+        except Exception as e:
+            print(f"⚠️  Error loading models: {e}")
+            print("Using randomly initialized models for testing")
+    else:
+        print("⚠️  No checkpoint directory provided, using random weights")
 
     # Initialize modulation components
     modulator = WirelessTransmitter(k=128, n=256, use_coding=True)
-    demodulator = WirelessReceiver(encoder_ref=polar_encoder, use_coding=True)
+    demodulator = WirelessReceiver(
+        encoder_ref=modulator.encoder,
+        use_coding=True,
+        constellation_type="qam",
+        bits_per_symbol=4
+    )
 
-    # Initialize polar coding
+    # Initialize polar coding (for reference, not used in modulation)
     info_bits = 128
     codeword_length = 256
     frozen_pos = get_frozen_pos(codeword_length, info_bits)
-    polar_encoder = PolarEncoder(frozen_pos, info_bits)
-    polar_decoder = PolarSCDecoder(frozen_pos, info_bits).to(device)
+    polar_encoder = PolarEncoder(frozen_pos, codeword_length)
+    polar_decoder = PolarSCDecoder(frozen_pos, codeword_length).to(device)
 
     print("\n" + "="*60)
     print("END-TO-END SYSTEM TESTS")
@@ -207,27 +334,44 @@ def run_end_to_end_tests():
         modulator, demodulator, polar_encoder, polar_decoder, device
     )
 
-    # Test 2: End-to-end system (using dummy data for demonstration)
+    # Test 2: End-to-end system (using real test data)
     print("\n2. Testing End-to-End System Performance...")
 
-    # Create dummy test data - vibration signals [batch_size, channels, time]
-    batch_size = 100
-    channels = 1
-    seq_len = 128  # Time sequence length
-    num_classes = 10
+    if test_loader is not None:
+        # Use real test data
+        end_to_end_results = test_end_to_end_system(
+            sender_model, receiver_model, quantizer, channel_modem,
+            test_loader, device
+        )
+    else:
+        # Fallback to dummy data for demonstration
+        print("⚠️  No test loader provided, using dummy data")
+        batch_size = 100
+        channels = 1
+        seq_len = 128  # Time sequence length
+        num_classes = 10
 
-    dummy_data = torch.randn(batch_size, channels, seq_len).to(device)
-    dummy_labels = torch.randint(0, num_classes, (batch_size,)).to(device)
+        dummy_data = torch.randn(batch_size, channels, seq_len).to(device)
+        dummy_labels = torch.randint(0, num_classes, (batch_size,)).to(device)
 
-    end_to_end_results = test_end_to_end_system(
-        sender_model, receiver_model, channel_modem,
-        (dummy_data, dummy_labels), device
-    )
+        end_to_end_results = test_end_to_end_system(
+            sender_model, receiver_model, quantizer, channel_modem,
+            (dummy_data, dummy_labels), device
+        )
 
     # Test 3: Model connectivity test
     print("\n3. Testing Model Connectivity...")
 
     try:
+        # Define test parameters
+        batch_size = 100
+        channels = 1
+        seq_len = 128  # Time sequence length
+        num_classes = 10
+
+        dummy_data = torch.randn(batch_size, channels, seq_len).to(device)
+        dummy_labels = torch.randint(0, num_classes, (batch_size,)).to(device)
+
         # Test sender forward pass
         channel_noise = torch.randn(batch_size, 1).to(device) * 0.1 + 1.0
         sender_out = sender_model(dummy_data, channel_noise)
@@ -288,7 +432,42 @@ def run_end_to_end_tests():
 
 
 if __name__ == "__main__":
-    success = run_end_to_end_tests()
+    import argparse
+
+    parser = argparse.ArgumentParser(description='End-to-End System Tests')
+    parser.add_argument('--checkpoint_dir', type=str, default=None,
+                        help='Directory containing trained model checkpoints')
+    parser.add_argument('--test_snr', type=float, default=15.0,
+                        help='SNR level for testing (not used in current implementation)')
+    parser.add_argument('--data_dir', type=str, default="data/vibcls/vibrodata",
+                        help='Directory containing data files')
+    parser.add_argument('--test_list', type=str, default="data/vibcls/test.txt",
+                        help='Path to test file list')
+    parser.add_argument('--class_map', type=str, default="data/vibcls/clsmap.txt",
+                        help='Path to class mapping file')
+    parser.add_argument('--batch_size', type=int, default=128,
+                        help='Batch size for testing')
+
+    args = parser.parse_args()
+
+    # Create test data loader if possible
+    test_loader = None
+    try:
+        from data.data import WavDataset, load_file_list, load_class_names
+        from data.data_loader import create_data_loaders_from_args
+        from torch.utils.data import DataLoader
+
+        # Create test dataset
+        test_files = load_file_list(args.test_list)
+        class_names = load_class_names(args.class_map)
+        test_dataset = WavDataset(test_files, args.data_dir)
+        test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+        print(f"✓ Created test data loader with {len(test_dataset)} samples")
+    except Exception as e:
+        print(f"⚠️  Could not create test data loader: {e}")
+        print("Using dummy data for testing")
+
+    success = run_end_to_end_tests(checkpoint_dir=args.checkpoint_dir, test_loader=test_loader)
     if success:
         print("\n✅ All end-to-end tests passed!")
     else:

@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from typing import Tuple, Optional
+from .interface import WirelessInterface
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -212,14 +213,23 @@ class ChannelModem:
         self.modulator = None
         self.demodulator = None
         
-        # Try to initialize polar coding components
-        try:
-            from .interface import create_wireless_interface
-            self.wireless_interface = create_wireless_interface(args)
-            print("Initialized WirelessInterface with adaptive polar coding systems")
-        except ImportError as e:
-            print(f"Warning: Could not initialize wireless interface: {e}")
-            self.wireless_interface = None
+        # Create WirelessInterface directly with correct parameters
+        self.wireless_interface = WirelessInterface(
+            comm_mode=getattr(args, 'communication_mode', 4),
+            n=getattr(args, 'N', 256),
+            k=getattr(args, 'K', 128),
+            channel_type=getattr(args, 'channel_type', 'uplink'),
+            decoder_type=getattr(args, 'decoder_type', 'SC'),
+            list_size=getattr(args, 'list_size', 8),
+            bits_per_symbol=getattr(args, 'bits_per_symbol', 2),
+            constellation_type=getattr(args, 'constellation_type', 'qam'),
+            normalize=getattr(args, 'normalize', True),
+            demapping_method=getattr(args, 'demapping_method', 'app'),
+            channel_model=getattr(args, 'channel_model', 'awgn'),
+            equalization_method=getattr(args, 'equalization_method', 'mrc'),
+            device=str(device),  # Use the device from this module
+            verbose=getattr(args, 'verbose', False)
+        )
 
     def transmit(self, symbols, snr):
         """
@@ -234,7 +244,7 @@ class ChannelModem:
         """
         return self.channel.transmit(symbols, snr)
     
-    def transmit_with_polar_coding(self, quantized_features, quantizer_indices, snr_db, use_coding=True, group_to_use=8):
+    def transmit_with_polar_coding(self, quantized_features, quantizer_indices, snr_db, use_coding=True, group_to_use=8, quantizer=None):
         """
         Transmit quantized features with polar coding integration.
         
@@ -244,6 +254,7 @@ class ChannelModem:
             snr_db: SNR in dB
             use_coding: Whether to use polar coding
             group_to_use: Number of groups to transmit (for adaptive selection)
+            quantizer: Quantizer instance for decoding received indices back to features
             
         Returns:
             tuple: (received_features, ber, transmit_mse)
@@ -270,14 +281,23 @@ class ChannelModem:
                     indices=selected_indices,
                     snr_db=snr_db,
                     bits_per_index=4,  # Assuming 4 bits per index
-                    group_to_use=group_to_use
+                    group_to_use=group_to_use,
+                    use_coding=use_coding  # Pass the use_coding parameter
                 )
                 
-                # Extract received features, BER, and MSE from result
-                received_features = result.get('received_features', quantized_features)
-                ber = result.get('ber', torch.tensor(0.01, device=device))
-                transmit_mse = result.get('transmit_mse', torch.tensor(0.0, device=device))
+                # Extract received indices, BER, and MSE from result
+                received_indices = result.get('received_indices', selected_indices)
+                ber = result.get('bit_error_rate', torch.tensor(0.01, device=device))
+                transmit_mse = result.get('index_error_rate', torch.tensor(0.0, device=device))
                 
+                # Decode received indices back to features if quantizer is provided
+                if quantizer is not None and hasattr(quantizer, 'decode'):
+                    try:
+                        received_features = quantizer.decode(received_indices)
+                    except Exception as e:
+                        print(f"Warning: Failed to decode received indices: {e}, using original quantized features")
+                        received_features = quantized_features
+ 
                 return received_features, ber, transmit_mse
             except Exception as e:
                 print(f"Error using WirelessInterface: {e}, falling back to simple transmission")
