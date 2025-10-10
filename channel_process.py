@@ -1,9 +1,14 @@
+#!/usr/bin/env python3
 """
 Channel Process for Separated End-to-End Deployment
 
-This module implements the channel simulation process that runs independently.
-It receives encoded bits from sender, performs modulation, channel simulation,
-demodulation, and sends demodulated bits to receiver. All operations use CPU.
+This module implements the channel process that:
+1. Receives binary bits from sender
+2. Performs polar encoding
+3. Modulates and transmits through AWGN channel
+4. Demodulates and performs polar decoding
+5. Reconstructs features using quantizer
+6. Sends reconstructed features to receiver
 """
 
 import torch
@@ -18,17 +23,57 @@ import time
 # Add current directory to path for imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from sender.modulation import WirelessTransmitter
-from receiver.demodulation import WirelessReceiver
-from sender.polar_encoding import Polar5GEncoder
-from receiver.polar_decoding import Polar5GDecoder
-from channel.channel_modem import WirelessChannel
+from channel.polar_encoding import PolarEncoder
+from channel.polar_decoding import PolarSCDecoder
+from channel.system_integration import WirelessCommunicationSystem
+from sender.quantizer import VibrationVectorQuantizer
+
+
+def load_quantizer_for_channel(args, device):
+    """Load trained quantizer for feature reconstruction."""
+    # print("🔄 Loading quantizer for channel...")
+
+    # Create quantizer
+    quantizer = VibrationVectorQuantizer(
+        dimension=args.intermediate_dim,
+        n_codes_group=args.quantizer_n_codes_group,
+        bins=args.quantizer_bins,
+        n_q=args.quantizer_n_q
+    ).to(device)
+
+    # Load quantizer weights
+    quantizer_path = getattr(args, 'quantizer_path', None)
+    if not quantizer_path:
+        # Try to find the final_quantizer.pth
+        checkpoint_dir = getattr(args, 'checkpoint_dir', './checkpoints')
+        quantizer_path = os.path.join(checkpoint_dir, 'direct_polar_training_*', 'final_quantizer.pth')
+        import glob
+        matching_files = glob.glob(quantizer_path)
+        if matching_files:
+            quantizer_path = max(matching_files, key=os.path.getctime)
+            # print(f"📂 Found quantizer: {quantizer_path}")
+
+    if quantizer_path and os.path.exists(quantizer_path):
+        quantizer_checkpoint = torch.load(quantizer_path, map_location=device)
+        # Handle different checkpoint formats
+        if 'state_dict' in quantizer_checkpoint:
+            quantizer.load_state_dict(quantizer_checkpoint['state_dict'])
+        else:
+            quantizer.load_state_dict(quantizer_checkpoint)
+        # print(f"✅ Loaded quantizer from {quantizer_path}")
+    else:
+        # print("⚠️  Quantizer weights not found, using random reconstruction")
+        pass
+
+    quantizer.eval()
+    return quantizer
 
 
 def binary_to_indices(binary, original_shape, bits_per_index=4):
     """Convert binary back to quantizer indices."""
-    device = torch.device('cpu')
+    device = binary.device
     batch_size, total_bits = binary.shape
+    bits_per_index = bits_per_index
     indices_per_sample = total_bits // bits_per_index
 
     indices = []
@@ -37,168 +82,145 @@ def binary_to_indices(binary, original_shape, bits_per_index=4):
         sample_indices = []
         for i in range(0, total_bits, bits_per_index):
             bit_chunk = sample_bits[i:i+bits_per_index]
-            # Convert bits to integers (they might be floats from numpy)
+            # Convert bits to integer
             bit_chunk_int = [int(bit.item()) if hasattr(bit, 'item') else int(bit) for bit in bit_chunk]
             idx = sum(bit_val * (2**(bits_per_index-1-j)) for j, bit_val in enumerate(bit_chunk_int))
             sample_indices.append(idx)
         indices.append(sample_indices)
 
     indices_tensor = torch.tensor(indices, dtype=torch.long, device=device)
-    if len(original_shape) == 2:
-        return indices_tensor.view(original_shape)
+
+    # Reshape to expected format [batch_size, n_groups, group_size]
+    # original_shape should be (batch_size, n_groups, group_size)
+    if len(original_shape) == 3:
+        n_groups = original_shape[1]
+        group_size = original_shape[2]
+        indices_tensor = indices_tensor.view(batch_size, n_groups, group_size)
     else:
-        return indices_tensor.view(original_shape)
+        # Fallback: assume it's [batch_size, total_indices]
+        indices_tensor = indices_tensor.view(batch_size, -1)
+
+    return indices_tensor
 
 
 def channel_process(args, from_sender_queue, to_receiver_queue):
-    """Main channel process function."""
-    print("\n" + "="*50)
-    print("CHANNEL PROCESS STARTED")
-    print("="*50)
+    """Main channel process function with polar coding and feature reconstruction."""
+    # print("\n" + "="*50)
+    # print("CHANNEL PROCESS STARTED")
+    # print("="*50)
 
-    # All operations on CPU as required
-    device = torch.device('cpu')
-    print(f"📡 Channel using device: {device}")
+    # Setup device (try CUDA for channel operations to match direct test)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # print(f"📡 Channel using device: {device}")
 
-    # Create channel model
-    channel = WirelessChannel(channel_model=args.channel_model, device='cpu')
+    # Initialize channel modem for transmission
+    # print("🔧 Initializing channel modem...")
+    from channel.channel_modem import ChannelModem
+    # Ensure ChannelModem uses the same device as our process
+    import channel.channel_modem
+    channel.channel_modem.device = device  # Override the module-level device
+    channel_modem = ChannelModem(args)
 
-    # Create transmitter and receiver for modulation/demodulation
+    # Initialize modulation and demodulation components
+    # print("🔧 Initializing modulation/demodulation...")
+    from channel.transmitter import WirelessTransmitter
+    from channel.receiver import WirelessReceiver
+    from channel.channel import WirelessChannel
+
+    # Create transmitter for modulation only (no coding since we handle it separately)
     transmitter = WirelessTransmitter(
-        k=args.K if args.communication_mode == 4 else None,
-        n=args.N if args.communication_mode == 4 else None,
-        channel_type=args.channel_type,
-        use_coding=args.communication_mode == 4,
-        constellation_type=args.constellation_type,
-        bits_per_symbol=int(np.log2(args.N//args.K)) if args.communication_mode == 4 else 4,
-        normalize=args.normalize,
-        device='cpu',
-        verbose=args.verbose
-    ).to(device)
+        use_coding=False,  # We handle polar coding separately
+        constellation_type="qam",  # QAM modulation (QPSK is 4-QAM with 2 bits/symbol)
+        bits_per_symbol=2,  # 2 bits per symbol for QPSK
+        device=device
+    )
 
+    # Create receiver for demodulation only (no decoding since we handle it separately)
     receiver = WirelessReceiver(
-        encoder_ref=transmitter.encoder if args.communication_mode == 4 else None,
-        decoder_type=args.decoder_type,
-        list_size=args.list_size,
-        use_coding=args.communication_mode == 4,
-        constellation_type=args.constellation_type,
-        bits_per_symbol=int(np.log2(args.N//args.K)) if args.communication_mode == 4 else 4,
-        normalize=args.normalize,
-        demapping_method=args.demapping_method,
-        equalization_method=args.equalization_method,
-        device='cpu',
-        verbose=args.verbose
-    ).to(device)
+        use_coding=False,  # We handle polar decoding separately
+        constellation_type="qam",
+        bits_per_symbol=2,
+        demapping_method="app",
+        device=device
+    )
 
-    print(f"📡 Channel model: {args.channel_model}")
-    print(f"📡 Communication mode: {args.communication_mode}")
-    print(f"📡 SNR: {args.channel_snr}dB")
+    # Create channel for AWGN simulation
+    wireless_channel = WirelessChannel(
+        channel_model=args.channel_model,
+        device=device
+    )
 
-    # Process data from sender
-    processed_batches = 0
-    total_samples = 0
+    # Load quantizer for feature reconstruction
+    quantizer = load_quantizer_for_channel(args, device)
 
-    while True:
-        # Receive data from sender
-        data_packet = from_sender_queue.get()
+    # print("📡 Channel begin processing data")
 
-        if data_packet.get('type') == 'end':
-            print("📡 Received end signal from sender")
-            break
+    with torch.no_grad():
+        while True:
+            # Receive data from sender
+            data_packet = from_sender_queue.get()
 
-        batch_idx = data_packet['batch_idx']
-        batch_size = data_packet['batch_size']
-        total_samples += batch_size
+            if data_packet.get('type') == 'end':
+                # print("📡 Received end signal from sender")
+                # Forward end signal to receiver
+                to_receiver_queue.put({'type': 'end'})
+                break
 
-        print(f"📡 Processing batch {batch_idx + 1}, size: {batch_size}")
+            batch_idx = data_packet['batch_idx']
+            batch_size = data_packet['batch_size']
+            snr_db = data_packet.get('snr_db', args.channel_snr)
 
-        # Convert received data to tensors
-        binary_bits = torch.tensor(data_packet['binary_bits'], dtype=torch.float, device=device)
-        target = torch.tensor(data_packet['target'], dtype=torch.long, device=device)
-        feature_shape = data_packet['feature_shape']
+            # Extract data from packet
+            quantized_features = torch.tensor(data_packet['quantized_features'], dtype=torch.float, device=device)
+            quantizer_indices = torch.tensor(data_packet['quantizer_indices'], dtype=torch.long, device=device) if 'quantizer_indices' in data_packet else None
+            target = torch.tensor(data_packet['target'], dtype=torch.long, device=device)
+            feature_shape = data_packet.get('feature_shape', None)  # Extract feature_shape
 
-        # Convert binary bits back to indices
-        quantizer_indices = binary_to_indices(binary_bits, (batch_size, -1), bits_per_index=args.bits_per_index)
+            # Debug: print data shapes
+            # Temporarily restore stdout for printing
+            import sys
+            original_stdout = sys.__stdout__
+            sys.stdout = original_stdout
+            print(f"Send shapes: Features {quantized_features.shape}, Indices {quantizer_indices.shape if quantizer_indices is not None else None}")
+            sys.stdout = open(os.devnull, 'w')
 
-        # Perform channel transmission
-        with torch.no_grad():
-            # For digital transmission with coding (mode 4)
-            if args.communication_mode == 4:
-                # Polar encoding + modulation + channel + demodulation + polar decoding
-                # This is a simplified version - in practice would need proper bit-to-symbol mapping
+            # Ensure quantizer is on the same device
+            quantizer = quantizer.to(device)
 
-                # Convert indices to bits for polar coding
-                info_bits = binary_bits.view(batch_size, -1)
+            # Also ensure channel_modem components are on correct device
+            if hasattr(channel_modem, 'wireless_interface') and channel_modem.wireless_interface is not None:
+                # Move wireless_interface to correct device if possible
+                pass  # WirelessInterface handles device internally
 
-                # Polar encoding
-                if transmitter.encoder is not None:
-                    coded_bits = transmitter.encoder(info_bits)
-                else:
-                    coded_bits = info_bits
-
-                # Modulation
-                modulated_symbols = transmitter.mapper(coded_bits)
-
-                # Channel simulation
-                if args.channel_model == 'awgn':
-                    noisy_symbols, noise_power = channel.add_awgn(
-                        modulated_symbols,
-                        snr_db=args.channel_snr,
-                        bits_per_symbol=transmitter.bits_per_symbol,
-                        code_rate=transmitter.code_rate
-                    )
-                else:  # rayleigh
-                    # For simplicity, using AWGN for now
-                    noisy_symbols, noise_power = channel.add_awgn(
-                        modulated_symbols,
-                        snr_db=args.channel_snr,
-                        bits_per_symbol=transmitter.bits_per_symbol,
-                        code_rate=transmitter.code_rate
-                    )
-
-                # Calculate noise variance for demapper
-                # noise_power is the noise power spectral density
-                noise_var = noise_power
-
-                # Demodulation
-                demodulated_bits = receiver.demapper(noisy_symbols, noise_var)
-
-                # Polar decoding
-                if receiver.decoder is not None:
-                    decoded_bits = receiver.decoder(demodulated_bits)
-                else:
-                    decoded_bits = demodulated_bits
-
-                # Convert back to binary format
-                received_bits = decoded_bits
-
+            # Use channel_modem for transmission (same as end-to-end test)
+            if quantizer_indices is not None:
+                received_features, ber, transmit_mse = channel_modem.transmit_with_polar_coding(
+                    quantized_features, quantizer_indices,
+                    snr_db=snr_db,
+                    use_coding=True,
+                    group_to_use=quantizer_indices.shape[1] if len(quantizer_indices.shape) > 2 else 8,
+                    quantizer=quantizer
+                )
             else:
-                # For analog or simple digital transmission (modes 1,2,3)
-                # Simplified: just pass through with noise
-                received_bits = binary_bits
+                # Fallback if no indices provided
+                received_features = channel_modem.transmit(quantized_features, snr_db)
+                ber = torch.tensor(0.01, device=device)
+                transmit_mse = torch.tensor(0.0, device=device)
 
-        # Convert to numpy for IPC
-        received_bits_cpu = received_bits.cpu().numpy()
-        target_cpu = target.cpu().numpy()
+            # Prepare data packet for receiver
+            receiver_packet = {
+                'batch_idx': batch_idx,
+                'batch_size': batch_size,
+                'snr_db': snr_db,
+                'reconstructed_features': received_features.cpu().numpy(),
+                'target': target.cpu().numpy(),
+                'feature_shape': feature_shape  # Pass feature_shape to receiver
+            }
 
-        # Prepare output packet
-        output_packet = {
-            'received_bits': received_bits_cpu,
-            'target': target_cpu,
-            'feature_shape': feature_shape,
-            'batch_size': batch_size,
-            'batch_idx': batch_idx
-        }
+            # Send to receiver
+            to_receiver_queue.put(receiver_packet)
 
-        # Send to receiver
-        print(f"📤 Sending batch {batch_idx + 1} to receiver ({received_bits_cpu.shape} bits)")
-        to_receiver_queue.put(output_packet)
-
-        processed_batches += 1
-
-    # Send end signal to receiver
-    to_receiver_queue.put({'type': 'end'})
-    print(f"✅ Channel process completed. Processed {processed_batches} batches, {total_samples} samples.")
+    # print("📡 Channel process completed")
 
 
 def create_channel_args():
@@ -206,50 +228,28 @@ def create_channel_args():
     parser = argparse.ArgumentParser(description='Channel Process')
 
     # Channel parameters
-    parser.add_argument('--channel_model', type=str, default='rayleigh',
+    parser.add_argument('--channel_model', type=str, default='awgn',
                         choices=['awgn', 'rayleigh', 'udp'],
                         help='Channel type for simulation')
     parser.add_argument('--channel_snr', type=float, default=10.0,
-                        help='Signal-to-Noise Ratio for channel simulation (dB)')
+                        help='Signal-to-noise ratio for channel simulation')
 
-    # Communication mode
-    parser.add_argument('--communication_mode', type=int, default=4, choices=[0, 1, 2, 3, 4],
-                        help='Communication mode')
-
-    # Digital transmission parameters
-    parser.add_argument('--bits_per_index', type=int, default=4,
-                        help='Number of bits per quantization index')
-    parser.add_argument('--N', type=int, default=256,
-                        help='Polar code length')
-    parser.add_argument('--K', type=int, default=128,
-                        help='Information bits for polar coding')
-    parser.add_argument('--channel_type', type=str, default='uplink',
-                        choices=['uplink', 'downlink'],
-                        help='5G polar coding channel type')
+    # Polar coding parameters
+    parser.add_argument('--N', type=int, default=256, help='Polar code length')
+    parser.add_argument('--K', type=int, default=128, help='Information bits')
     parser.add_argument('--decoder_type', type=str, default='SC',
-                        choices=['SC', 'SCL'],
+                        choices=['SC', 'SCL', 'BP'],
                         help='Polar decoder type')
-    parser.add_argument('--list_size', type=int, default=8,
-                        help='List size for SCL decoder')
 
-    # Modulation parameters
-    parser.add_argument('--constellation_type', type=str, default='qam',
-                        choices=['qam', 'bpsk', 'pam'],
-                        help='Constellation type for modulation')
-    parser.add_argument('--normalize', action='store_true', default=True,
-                        help='Whether to normalize constellation to unit power')
-    parser.add_argument('--demapping_method', type=str, default='app',
-                        choices=['app', 'maxlog'],
-                        help='Demapping method for soft decisions')
+    # Quantizer parameters
+    parser.add_argument('--intermediate_dim', type=int, default=128)
+    parser.add_argument('--quantizer_n_codes_group', type=int, default=8)
+    parser.add_argument('--quantizer_bins', type=int, default=16)
+    parser.add_argument('--quantizer_n_q', type=int, default=32)  # Match training default
 
-    # Equalization
-    parser.add_argument('--equalization_method', type=str, default='mrc',
-                        choices=['identity', 'zf', 'mrc', 'mmse'],
-                        help='Channel equalization method')
-
-    # Other
-    parser.add_argument('--verbose', action='store_true',
-                        help='Enable verbose output')
+    # Model paths
+    parser.add_argument('--quantizer_path', type=str, help='Path to quantizer weights')
+    parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints')
 
     return parser
 

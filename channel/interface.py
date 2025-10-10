@@ -129,9 +129,10 @@ class WirelessInterface:
             )
         
         if verbose:
-            print(f"WirelessInterface initialized with mode {comm_mode}")
-            print(f"System parameters: n={n}, k={k}, rate={k/n:.3f}")
-            print(f"Device: {device}")
+            # print(f"WirelessInterface initialized with mode {comm_mode}")
+            # print(f"System parameters: n={n}, k={k}, rate={k/n:.3f}")
+            # print(f"Device: {device}")
+            pass
     
     def _init_digital_systems(self, **kwargs):
         """Initialize digital communication systems for modes 3 and 4."""
@@ -177,11 +178,12 @@ class WirelessInterface:
         for i in range(8):  # 8 adaptive systems
             # Calculate adaptive payload size: start from k=128, decrease by 16 each time
             adaptive_k = kwargs['k'] - i * 16
-            print(f"Adaptive polar code system {i}: k={adaptive_k}, n={kwargs['n']}, rate={adaptive_k / kwargs['n']:.3f}")
+            # print(f"Adaptive polar code system {i}: k={adaptive_k}, n={kwargs['n']}, rate={adaptive_k / kwargs['n']:.3f}")
             # Skip if k becomes too small (maintain minimum viable code rate)
             if adaptive_k < 16:
                 if kwargs.get('verbose', False):
-                    print(f"Skipping adaptive system {i}: k={adaptive_k} too small")
+                    # print(f"Skipping adaptive system {i}: k={adaptive_k} too small")
+                    pass
                 continue
                 
             system = WirelessCommunicationSystem(

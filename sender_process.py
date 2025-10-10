@@ -1,7 +1,17 @@
 """
 Sender Process for Separated End-to-End Deployment
 
-This module implements the sender side of the separated communication system.
+This module implements the sender side of t    if quantizer_path and os.path.exists(quantizer_path):
+        quantizer_checkpoint = torch.load(quantizer_path, map_location=device)
+        # Handle different checkpoint formats
+        if 'state_dict' in quantizer_checkpoint:
+            quantizer.load_state_dict(quantizer_checkpoint['state_dict'])
+        else:
+            quantizer.load_state_dict(quantizer_checkpoint)
+        # print(f"✅ Loaded quantizer from {quantizer_path}")
+    else:
+        # print("⚠️  Quantizer not found, using randomly initialized quantizer")
+        passed communication system.
 It loads the trained sender model and quantizer, processes input data,
 and sends encoded bits through IPC to the channel process.
 """
@@ -22,6 +32,7 @@ from sender.sender_model import SenderNet
 from sender.quantizer import VibrationVectorQuantizer
 from data.data_loader import create_data_loaders_from_args
 from channel.channel_modem import ChannelModem
+from sender.polar_encoding import PolarEncoder
 
 
 def indices_to_binary(indices, bits_per_index=4):
@@ -58,30 +69,58 @@ def load_sender_models(args, device):
     if not sender_model_path:
         # Try to find the final_sender_model.pth
         checkpoint_dir = getattr(args, 'checkpoint_dir', './checkpoints')
-        sender_model_path = os.path.join(checkpoint_dir, 'end_to_end_training_*', 'final_sender_model.pth')
-        import glob
-        matching_files = glob.glob(sender_model_path)
-        if matching_files:
-            sender_model_path = max(matching_files, key=os.path.getctime)
+        # Look for training directories
+        if os.path.exists(checkpoint_dir):
+            subdirs = [d for d in os.listdir(checkpoint_dir) if os.path.isdir(os.path.join(checkpoint_dir, d))]
+            # Find directories that match the pattern
+            training_dirs = [d for d in subdirs if 'training' in d or 'direct_polar' in d]
+            if training_dirs:
+                # Use the most recent training directory
+                training_dirs.sort(key=lambda x: os.path.getctime(os.path.join(checkpoint_dir, x)), reverse=True)
+                latest_dir = training_dirs[0]
+                sender_model_path = os.path.join(checkpoint_dir, latest_dir, 'final_sender_model.pth')
+                # print(f"📂 Found sender model: {sender_model_path}")
 
     if sender_model_path and os.path.exists(sender_model_path):
         sender_checkpoint = torch.load(sender_model_path, map_location=device)
-        sender_model.load_state_dict(sender_checkpoint['state_dict'])
+        # Handle different checkpoint formats
+        if 'state_dict' in sender_checkpoint:
+            sender_model.load_state_dict(sender_checkpoint['state_dict'])
+        else:
+            sender_model.load_state_dict(sender_checkpoint)
+        # print(f"✅ Loaded sender model from {sender_model_path}")
+    else:
+        # print("⚠️  Sender model not found, using randomly initialized model")
+        pass
 
     # Load quantizer
     quantizer_path = getattr(args, 'quantizer_path', None)
     if not quantizer_path:
         # Try to find the final_quantizer.pth
         checkpoint_dir = getattr(args, 'checkpoint_dir', './checkpoints')
-        quantizer_path = os.path.join(checkpoint_dir, 'end_to_end_training_*', 'final_quantizer.pth')
-        import glob
-        matching_files = glob.glob(quantizer_path)
-        if matching_files:
-            quantizer_path = max(matching_files, key=os.path.getctime)
+        # Look for training directories
+        if os.path.exists(checkpoint_dir):
+            subdirs = [d for d in os.listdir(checkpoint_dir) if os.path.isdir(os.path.join(checkpoint_dir, d))]
+            # Find directories that match the pattern
+            training_dirs = [d for d in subdirs if 'training' in d or 'direct_polar' in d]
+            if training_dirs:
+                # Use the most recent training directory
+                training_dirs.sort(key=lambda x: os.path.getctime(os.path.join(checkpoint_dir, x)), reverse=True)
+                latest_dir = training_dirs[0]
+                quantizer_path = os.path.join(checkpoint_dir, latest_dir, 'final_quantizer.pth')
+                # print(f"📂 Found quantizer: {quantizer_path}")
 
     if quantizer_path and os.path.exists(quantizer_path):
         quantizer_checkpoint = torch.load(quantizer_path, map_location=device)
-        quantizer.load_state_dict(quantizer_checkpoint['state_dict'])
+        # Handle different checkpoint formats
+        if 'state_dict' in quantizer_checkpoint:
+            quantizer.load_state_dict(quantizer_checkpoint['state_dict'])
+        else:
+            quantizer.load_state_dict(quantizer_checkpoint)
+        # print(f"✅ Loaded quantizer from {quantizer_path}")
+    else:
+        # print("⚠️  Quantizer weights not found, using random reconstruction")
+        pass
 
     sender_model.eval()
     quantizer.eval()
@@ -90,7 +129,7 @@ def load_sender_models(args, device):
 
 
 def sender_process(args, to_channel_queue, from_channel_queue=None):
-    """Main sender process function."""
+    """Main sender process function with polar encoding."""
 
     # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -135,17 +174,18 @@ def sender_process(args, to_channel_queue, from_channel_queue=None):
             binary_bits = indices_to_binary(selected_indices, bits_per_index=args.bits_per_index)
 
             # Convert to CPU for IPC (channel process uses CPU)
-            binary_bits_cpu = binary_bits.detach().cpu().numpy()
+            selected_indices_cpu = selected_indices.detach().cpu().numpy()
             target_cpu = target.detach().cpu().numpy()
-            feature_shape_cpu = feature_shape  # tuple, already serializable
+            quantized_features_cpu = quantized_features.detach().cpu().numpy()
 
-            # Prepare data packet
+            # Prepare data packet (send indices directly for channel_modem)
             data_packet = {
-                'binary_bits': binary_bits_cpu,
+                'quantizer_indices': selected_indices_cpu,
+                'quantized_features': quantized_features_cpu,
                 'target': target_cpu,
-                'feature_shape': feature_shape_cpu,
                 'batch_size': batch_size,
-                'batch_idx': batch_idx
+                'batch_idx': batch_idx,
+                'feature_shape': feature_shape  # Add feature_shape for receiver reconstruction
             }
 
             # Send to channel process
@@ -182,6 +222,8 @@ def create_sender_args():
     parser.add_argument('--bits_per_index', type=int, default=4)
     parser.add_argument('--max_groups', type=int, default=8)
     parser.add_argument('--group_to_use', type=int, default=8, help='Number of groups to transmit')
+    parser.add_argument('--N', type=int, default=256, help='Polar code length')
+    parser.add_argument('--K', type=int, default=128, help='Information bits')
 
     # Model paths
     parser.add_argument('--sender_model_path', type=str, help='Path to sender model weights')

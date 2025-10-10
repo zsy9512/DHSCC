@@ -33,11 +33,11 @@ def create_data_loaders_from_args(args):
     batch_size = getattr(args, 'batch_size', 64)
     augment_train = getattr(args, 'augment_train', True)
 
-    print(f"Loading data from:")
-    print(f"  Data directory: {data_dir}")
-    print(f"  Train list: {train_list}")
-    print(f"  Test list: {test_list}")
-    print(f"  Class map: {class_map}")
+    # print(f"Loading data from:")
+    # print(f"  Data directory: {data_dir}")
+    # print(f"  Train list: {train_list}")
+    # print(f"  Test list: {test_list}")
+    # print(f"  Class map: {class_map}")
 
     # Check if data files exist
     if not os.path.exists(data_dir):
@@ -55,9 +55,9 @@ def create_data_loaders_from_args(args):
     class_names = load_class_names(class_map)
     num_classes = len(class_names)
 
-    print(f"  Number of classes: {num_classes}")
-    print(f"  Training samples: {len(train_files)}")
-    print(f"  Test samples: {len(test_files)}")
+    # print(f"  Number of classes: {num_classes}")
+    # print(f"  Training samples: {len(train_files)}")
+    # print(f"  Test samples: {len(test_files)}")
 
     # Create datasets
     train_dataset = WavDataset(train_files, data_dir, augment=augment_train)
