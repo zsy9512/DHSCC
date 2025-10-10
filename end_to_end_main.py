@@ -342,8 +342,34 @@ def test_model(args):
     print("STARTING END-TO-END TESTING")
     print("="*60)
 
+    # Create test data loader
+    test_loader = None
+    num_classes = 10  # Default fallback
+    try:
+        from torch.utils.data import DataLoader
+        train_loader, test_loader_temp, num_classes = create_data_loaders(args)
+        test_loader = test_loader_temp
+        print(f"✓ Created test data loader with {num_classes} classes")
+    except Exception as e:
+        print(f"⚠️  Could not create test data loader: {e}")
+        print("Using dummy data for testing")
+
+    # Determine model path
+    model_path = None
+    if hasattr(args, 'model_path') and args.model_path:
+        model_path = args.model_path
+        print(f"📁 Using specified model path: {model_path}")
+    elif hasattr(args, 'checkpoint_dir') and args.checkpoint_dir:
+        print(f"📁 Using checkpoint directory: {args.checkpoint_dir}")
+
     # Run comprehensive tests
-    success = run_end_to_end_tests()
+    success = run_end_to_end_tests(
+        checkpoint_dir=args.checkpoint_dir if not model_path else None,
+        test_loader=test_loader,
+        args=args,
+        num_classes=num_classes,
+        model_path=model_path
+    )
 
     if success:
         print("\n✅ All tests passed!")
