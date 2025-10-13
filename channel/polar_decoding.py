@@ -420,7 +420,7 @@ class Polar5GDecoder(torch.nn.Module):
             from .polar_encoding import Polar5GEncoder
         except ImportError:
             # Fallback for relative import
-            from ..sender.polar_encoding import Polar5GEncoder
+            from polar_encoding import Polar5GEncoder
         
         if not isinstance(enc_polar, Polar5GEncoder):
             raise TypeError("enc_polar must be Polar5GEncoder.")

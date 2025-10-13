@@ -38,7 +38,7 @@ def test_end_to_end_separated_deployment():
     # print("启动接收端进程...")
     receiver_process = mp.Process(
         target=run_receiver_process,
-        args=(channel_to_receiver, receiver_model_path, checkpoint_dir)
+        args=(channel_to_receiver, receiver_model_path, quantizer_path, checkpoint_dir)
     )
     receiver_process.start()
 
@@ -91,7 +91,7 @@ def test_end_to_end_separated_deployment():
     # print("✓ 端到端性能测试完成")
     return True
 
-def run_receiver_process(input_queue, model_path, checkpoint_dir):
+def run_receiver_process(input_queue, model_path, quantizer_path, checkpoint_dir):
     """运行接收端进程"""
     try:
         # 改变工作目录
@@ -112,8 +112,13 @@ def run_receiver_process(input_queue, model_path, checkpoint_dir):
             '--mode', 'test',
             '--max_batches', '10',  # 处理10个批次进行性能评估
             '--receiver_model_path', model_path,
+            '--quantizer_path', quantizer_path,
             '--checkpoint_dir', checkpoint_dir,
-            '--batch_size', '32'  # 更大的批次大小
+            '--batch_size', '5',  # 更大的批次大小
+            '--intermediate_dim', '128',
+            '--quantizer_n_codes_group', '8',
+            '--quantizer_bins', '16',
+            '--quantizer_n_q', '32'
         ]
 
         # 调用接收端的主函数
@@ -190,7 +195,7 @@ def run_sender_process(output_queue, model_path, quantizer_path, checkpoint_dir)
             '--sender_model_path', model_path,
             '--quantizer_path', quantizer_path,
             '--checkpoint_dir', checkpoint_dir,
-            '--batch_size', '32',  # 更大的批次大小
+            '--batch_size', '5',  # 更大的批次大小
             '--group_to_use', '8'  # 使用8个组，与训练最终阶段一致
         ]
 

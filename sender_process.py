@@ -31,8 +31,35 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from sender.sender_model import SenderNet
 from sender.quantizer import VibrationVectorQuantizer
 from data.data_loader import create_data_loaders_from_args
-from channel.channel_modem import ChannelModem
-from sender.polar_encoding import PolarEncoder
+from channel.polar_encoding import Polar5GEncoder
+
+
+class PolarCodec:
+    """Unified 5G Polar coding codec manager."""
+    
+    def __init__(self, k=128, n=256, channel_type="uplink", device="cpu"):
+        self.k = k
+        self.n = n
+        self.channel_type = channel_type
+        self.device = device
+        
+        # Initialize 5G polar encoder
+        self.encoder = Polar5GEncoder(
+            k=k,
+            n=n,
+            channel_type=channel_type,
+            verbose=False,
+            dtype=torch.float32
+        ).to(device)
+    
+    def encode(self, binary_bits):
+        """Encode binary bits to polar codeword."""
+        return self.encoder(binary_bits.float())
+    
+    def update_device(self, device):
+        """Update device for all components."""
+        self.device = device
+        self.encoder = self.encoder.to(device)
 
 
 def indices_to_binary(indices, bits_per_index=4):
@@ -55,6 +82,13 @@ def indices_to_binary(indices, bits_per_index=4):
 
     binary_tensor = torch.tensor(binary, dtype=torch.float, device=device)
     return binary_tensor.view(batch_size, -1)
+
+
+def polar_encode(binary_bits, k=128, n=256, channel_type="uplink", device="cpu"):
+    """Perform 5G polar encoding on binary bits."""
+    # Create codec instance for encoding
+    codec = PolarCodec(k=k, n=n, channel_type=channel_type, device=device)
+    return codec.encode(binary_bits)
 
 
 def load_sender_models(args, device):
@@ -173,19 +207,24 @@ def sender_process(args, to_channel_queue, from_channel_queue=None):
             # Convert indices to binary for transmission
             binary_bits = indices_to_binary(selected_indices, bits_per_index=args.bits_per_index)
 
+            # Perform polar encoding
+            codeword = polar_encode(binary_bits, k=args.K, n=args.N, channel_type="uplink", device=device)
+
             # Convert to CPU for IPC (channel process uses CPU)
             selected_indices_cpu = selected_indices.detach().cpu().numpy()
+            codeword_cpu = codeword.detach().cpu().numpy()
             target_cpu = target.detach().cpu().numpy()
             quantized_features_cpu = quantized_features.detach().cpu().numpy()
 
-            # Prepare data packet (send indices directly for channel_modem)
+            # Prepare data packet (send codeword instead of indices)
             data_packet = {
-                'quantizer_indices': selected_indices_cpu,
+                'codeword': codeword_cpu,
                 'quantized_features': quantized_features_cpu,
                 'target': target_cpu,
                 'batch_size': batch_size,
                 'batch_idx': batch_idx,
-                'feature_shape': feature_shape  # Add feature_shape for receiver reconstruction
+                'feature_shape': feature_shape,  # Add feature_shape for receiver reconstruction
+                'selected_indices_shape': selected_indices.shape  # Keep for receiver reconstruction
             }
 
             # Send to channel process

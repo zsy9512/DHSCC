@@ -20,6 +20,75 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from receiver.receiver_model import ReceiverNet
 from data.data_loader import create_data_loaders_from_args
+from sender.quantizer import VibrationVectorQuantizer
+from channel.polar_decoding import Polar5GDecoder
+from channel.polar_encoding import Polar5GEncoder
+
+
+class PolarCodec:
+    """Unified 5G Polar coding codec manager."""
+    
+    def __init__(self, k=128, n=256, channel_type="uplink", device="cpu"):
+        self.k = k
+        self.n = n
+        self.channel_type = channel_type
+        self.device = device
+        
+        # Initialize 5G polar encoder and decoder
+        self.encoder = Polar5GEncoder(
+            k=k,
+            n=n,
+            channel_type=channel_type,
+            verbose=False,
+            dtype=torch.float32
+        ).to(device)
+        
+        self.decoder = Polar5GDecoder(self.encoder).to(device)
+    
+    def encode(self, binary_bits):
+        """Encode binary bits to polar codeword."""
+        return self.encoder(binary_bits.float())
+    
+    def decode(self, llrs):
+        """Decode LLRs to binary bits."""
+        return self.decoder(llrs)
+    
+    def update_device(self, device):
+        """Update device for all components."""
+        self.device = device
+        self.encoder = self.encoder.to(device)
+        # Decoder uses encoder internally, so it should be automatically on the correct device
+
+
+def load_quantizer_for_receiver(args, device):
+    """Load trained quantizer for feature reconstruction at receiver."""
+    # Create quantizer
+    quantizer = VibrationVectorQuantizer(
+        dimension=args.intermediate_dim,
+        n_codes_group=args.quantizer_n_codes_group,
+        bins=args.quantizer_bins,
+        n_q=args.quantizer_n_q
+    ).to(device)
+
+    # Load quantizer weights
+    quantizer_path = getattr(args, 'quantizer_path', None)
+    if not quantizer_path:
+        # Try to find the final_quantizer.pth
+        checkpoint_dir = getattr(args, 'checkpoint_dir', './checkpoints')
+        quantizer_path = os.path.join(checkpoint_dir, 'direct_polar_training_*', 'final_quantizer.pth')
+        import glob
+        matching_files = glob.glob(quantizer_path)
+        if matching_files:
+            quantizer_path = matching_files[0]
+
+    if quantizer_path and os.path.exists(quantizer_path):
+        quantizer_checkpoint = torch.load(quantizer_path, map_location=device)
+        quantizer.load_state_dict(quantizer_checkpoint)
+        # print(f"✅ Loaded quantizer from {quantizer_path}")
+    else:
+        print(f"⚠️  Warning: Could not find quantizer weights at {quantizer_path}")
+
+    return quantizer
 
 
 def load_receiver_models(args, device, num_classes):
@@ -79,7 +148,44 @@ def receiver_process(args, from_channel_queue):
 
     # Load models
     receiver_model = load_receiver_models(args, device, num_classes)
+    
+    # Load quantizer for feature reconstruction
+    quantizer = load_quantizer_for_receiver(args, device)
+    
+    # Initialize polar codec
+    polar_codec = PolarCodec(k=args.K, n=args.N, channel_type="uplink", device=device)
+    
+    # Run main processing loop
+    receiver_process_main_loop(args, from_channel_queue, receiver_model, quantizer, polar_codec, device)
 
+
+def binary_to_indices(binary, original_shape, bits_per_index=4):
+    """Convert binary back to quantizer indices."""
+    device = binary.device
+    batch_size, total_bits = binary.shape
+    indices_per_sample = total_bits // bits_per_index
+    
+    indices = []
+    for b in range(batch_size):
+        sample_bits = binary[b]
+        sample_indices = []
+        for i in range(0, total_bits, bits_per_index):
+            bit_chunk = sample_bits[i:i+bits_per_index]
+            # Convert to int for calculation
+            bit_values = bit_chunk.int().tolist()
+            idx = sum(bit_val * (2**(bits_per_index-1-j)) for j, bit_val in enumerate(bit_values))
+            sample_indices.append(idx)
+        indices.append(sample_indices)
+    
+    indices_tensor = torch.tensor(indices, dtype=torch.long, device=device)
+    if len(original_shape) == 2:
+        return indices_tensor.view(original_shape)
+    else:
+        return indices_tensor.view(original_shape)
+
+
+def receiver_process_main_loop(args, from_channel_queue, receiver_model, quantizer, polar_codec, device):
+    """Main processing loop for receiver."""
     # Initialize metrics (will be dynamically created)
     results = {}
     last_batch_size = None  # Store the last batch size for loss calculation
@@ -103,16 +209,26 @@ def receiver_process(args, from_channel_queue):
             # print(f"📡 Processing batch {batch_idx + 1}, size: {batch_size}, SNR: {snr_db}dB")
 
             # Convert received data to tensors
-            reconstructed_features = torch.tensor(data_packet['reconstructed_features'], dtype=torch.float, device=device)
+            llrs = torch.tensor(data_packet['llrs'], dtype=torch.float, device=device)
             target = torch.tensor(data_packet['target'], dtype=torch.long, device=device)
             feature_shape = data_packet.get('feature_shape', None)  # Extract feature_shape from packet
+            selected_indices_shape = data_packet.get('selected_indices_shape', None)  # Extract shape for binary_to_indices
 
             # Temporarily restore stdout for printing
             import sys
             original_stdout = sys.__stdout__
             sys.stdout = original_stdout
-            print(f"Receive shapes: Features {reconstructed_features.shape}")
+            print(f"Receive shapes: LLRs {llrs.shape}")
             sys.stdout = open(os.devnull, 'w')
+
+            # Perform polar decoding
+            decoded_bits = polar_codec.decode(llrs)
+            
+            # Convert decoded bits back to indices
+            received_indices = binary_to_indices(decoded_bits, selected_indices_shape, bits_per_index=4)
+            
+            # Decode received indices back to features using quantizer
+            reconstructed_features = quantizer.decode(received_indices)
 
             # Use received feature_shape if available, otherwise use default
             if feature_shape is not None:
@@ -168,8 +284,11 @@ def create_receiver_args():
     parser.add_argument('--test_list', type=str, default="data/vibcls/test.txt")
     parser.add_argument('--class_map', type=str, default="data/vibcls/clsmap.txt")
 
-    # Model parameters
+    # Quantizer parameters
     parser.add_argument('--intermediate_dim', type=int, default=128)
+    parser.add_argument('--quantizer_n_codes_group', type=int, default=8)
+    parser.add_argument('--quantizer_bins', type=int, default=16)
+    parser.add_argument('--quantizer_n_q', type=int, default=32)  # Match training default
     parser.add_argument('--N', type=int, default=256, help='Polar code length')
     parser.add_argument('--K', type=int, default=128, help='Information bits')
     parser.add_argument('--snr_min', type=int, default=10, help='Minimum SNR for testing')
@@ -182,6 +301,7 @@ def create_receiver_args():
 
     # Model paths
     parser.add_argument('--receiver_model_path', type=str, help='Path to receiver model weights')
+    parser.add_argument('--quantizer_path', type=str, help='Path to quantizer weights')
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints')
 
     return parser

@@ -172,16 +172,17 @@ def channel_process(args, from_sender_queue, to_receiver_queue):
 
             # Extract data from packet
             quantized_features = torch.tensor(data_packet['quantized_features'], dtype=torch.float, device=device)
-            quantizer_indices = torch.tensor(data_packet['quantizer_indices'], dtype=torch.long, device=device) if 'quantizer_indices' in data_packet else None
+            codeword = torch.tensor(data_packet['codeword'], dtype=torch.float, device=device)
             target = torch.tensor(data_packet['target'], dtype=torch.long, device=device)
             feature_shape = data_packet.get('feature_shape', None)  # Extract feature_shape
+            selected_indices_shape = data_packet.get('selected_indices_shape', None)  # Extract shape for reconstruction
 
             # Debug: print data shapes
             # Temporarily restore stdout for printing
             import sys
             original_stdout = sys.__stdout__
             sys.stdout = original_stdout
-            print(f"Send shapes: Features {quantized_features.shape}, Indices {quantizer_indices.shape if quantizer_indices is not None else None}")
+            print(f"Send shapes: Features {quantized_features.shape}, Codeword {codeword.shape}")
             sys.stdout = open(os.devnull, 'w')
 
             # Ensure quantizer is on the same device
@@ -192,29 +193,23 @@ def channel_process(args, from_sender_queue, to_receiver_queue):
                 # Move wireless_interface to correct device if possible
                 pass  # WirelessInterface handles device internally
 
-            # Use channel_modem for transmission (same as end-to-end test)
-            if quantizer_indices is not None:
-                received_features, ber, transmit_mse = channel_modem.transmit_with_polar_coding(
-                    quantized_features, quantizer_indices,
-                    snr_db=snr_db,
-                    use_coding=True,
-                    group_to_use=quantizer_indices.shape[1] if len(quantizer_indices.shape) > 2 else 8,
-                    quantizer=quantizer
-                )
-            else:
-                # Fallback if no indices provided
-                received_features = channel_modem.transmit(quantized_features, snr_db)
-                ber = torch.tensor(0.01, device=device)
-                transmit_mse = torch.tensor(0.0, device=device)
+            # Use channel_modem for transmission (codeword already encoded)
+            llrs, ber, transmit_mse = channel_modem.transmit_encoded_codeword(
+                quantized_features, codeword,
+                snr_db=snr_db,
+                quantizer=quantizer,
+                selected_indices_shape=selected_indices_shape
+            )
 
             # Prepare data packet for receiver
             receiver_packet = {
                 'batch_idx': batch_idx,
                 'batch_size': batch_size,
                 'snr_db': snr_db,
-                'reconstructed_features': received_features.cpu().numpy(),
+                'llrs': llrs.cpu().numpy(),
                 'target': target.cpu().numpy(),
-                'feature_shape': feature_shape  # Pass feature_shape to receiver
+                'feature_shape': feature_shape,  # Pass feature_shape to receiver
+                'selected_indices_shape': selected_indices_shape  # Pass shape for binary_to_indices
             }
 
             # Send to receiver
