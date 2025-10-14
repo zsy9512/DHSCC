@@ -206,10 +206,10 @@ def sender_process(args, to_channel_queue, from_channel_queue=None):
 
             # Convert indices to binary for transmission
             binary_bits = indices_to_binary(selected_indices, bits_per_index=args.bits_per_index)
-
+            
             # Perform polar encoding
             codeword = polar_encode(binary_bits, k=args.K, n=args.N, channel_type="uplink", device=device)
-
+            #codeword = codeword.reshape(1, -1).to(device)
             # Convert to CPU for IPC (channel process uses CPU)
             selected_indices_cpu = selected_indices.detach().cpu().numpy()
             codeword_cpu = codeword.detach().cpu().numpy()

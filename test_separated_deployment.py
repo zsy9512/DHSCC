@@ -195,7 +195,7 @@ def run_sender_process(output_queue, model_path, quantizer_path, checkpoint_dir)
             '--sender_model_path', model_path,
             '--quantizer_path', quantizer_path,
             '--checkpoint_dir', checkpoint_dir,
-            '--batch_size', '5',  # 更大的批次大小
+            '--batch_size', '16',  # 更大的批次大小
             '--group_to_use', '8'  # 使用8个组，与训练最终阶段一致
         ]
 

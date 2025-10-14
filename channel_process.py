@@ -176,23 +176,13 @@ def channel_process(args, from_sender_queue, to_receiver_queue):
             target = torch.tensor(data_packet['target'], dtype=torch.long, device=device)
             feature_shape = data_packet.get('feature_shape', None)  # Extract feature_shape
             selected_indices_shape = data_packet.get('selected_indices_shape', None)  # Extract shape for reconstruction
-
-            # Debug: print data shapes
-            # Temporarily restore stdout for printing
-            import sys
-            original_stdout = sys.__stdout__
-            sys.stdout = original_stdout
-            print(f"Send shapes: Features {quantized_features.shape}, Codeword {codeword.shape}")
-            sys.stdout = open(os.devnull, 'w')
-
             # Ensure quantizer is on the same device
             quantizer = quantizer.to(device)
-
             # Also ensure channel_modem components are on correct device
             if hasattr(channel_modem, 'wireless_interface') and channel_modem.wireless_interface is not None:
                 # Move wireless_interface to correct device if possible
                 pass  # WirelessInterface handles device internally
-
+            codeword = codeword.reshape(1, -1).to(device)  # Ensure correct shape and device
             # Use channel_modem for transmission (codeword already encoded)
             llrs, ber, transmit_mse = channel_modem.transmit_encoded_codeword(
                 quantized_features, codeword,
@@ -200,7 +190,7 @@ def channel_process(args, from_sender_queue, to_receiver_queue):
                 quantizer=quantizer,
                 selected_indices_shape=selected_indices_shape
             )
-
+            
             # Prepare data packet for receiver
             receiver_packet = {
                 'batch_idx': batch_idx,
