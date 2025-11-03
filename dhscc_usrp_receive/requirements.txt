@@ -1,0 +1,7 @@
+numpy
+scipy
+torch
+crcmod
+uhd
+PyQt5
+matplotlib
