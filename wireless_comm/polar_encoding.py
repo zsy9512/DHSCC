@@ -274,7 +274,7 @@ def generate_5g_ranking(k, n, sort=True):
         raise ValueError("n must be a power of 2.")
 
     # Load the channel ranking from csv format TS 38.212 5.3.1.2-1
-    csv_path = "/home/zsy/workplace/DHSCC/wireless_comm/polar_5G.csv"
+    csv_path = "wireless_comm/polar_5G.csv"
     try:
         ch_order = np.genfromtxt(csv_path, delimiter=";")
         ch_order = ch_order.astype(int)

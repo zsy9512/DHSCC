@@ -8,10 +8,18 @@ This module provides functionality for:
 """
 
 import os
+import warnings
 import torch
-import torchaudio
 import numpy as np
 from torch.utils.data import Dataset
+
+# Use scipy.io.wavfile for robust WAV reading on Windows
+try:
+    from scipy.io import wavfile
+    _HAS_WAVFILE = True
+except Exception:
+    wavfile = None
+    _HAS_WAVFILE = False
 
 def load_file_list(file_list_path):
     """
@@ -175,13 +183,47 @@ class WavDataset(Dataset):
             tuple: (waveform, label) where waveform is a torch.Tensor and label is an integer
         """
         filename, label = self.file_list[idx]
-        file_path = os.path.join(self.data_dir, filename)
-        
-        # Load audio file
-        waveform, sr = torchaudio.load(file_path)
-        # Resample if needed
+        # Build a normalized path that works across platforms (Windows/Unix)
+        file_path = os.path.normpath(os.path.join(self.data_dir, filename))
+
+        # Load audio file using scipy.io.wavfile
+        if not _HAS_WAVFILE:
+            raise RuntimeError(
+                "scipy.io.wavfile is required but not available. Please install scipy: `pip install scipy` or use conda."
+            )
+
+        try:
+            sr, data = wavfile.read(file_path)
+        except Exception as e:
+            raise RuntimeError(f"Could not read WAV file '{file_path}': {e}")
+
+        # Ensure data is (samples, channels)
+        if data.ndim == 1:
+            data = data[:, None]
+
+        # Convert integer PCM to float32 in range [-1, 1]
+        if np.issubdtype(data.dtype, np.integer):
+            info = np.iinfo(data.dtype)
+            max_abs = max(abs(info.min), abs(info.max))
+            data = data.astype('float32') / float(max_abs)
+        else:
+            data = data.astype('float32')
+        # Resample if needed to target sample_rate
         if sr != self.sample_rate:
-            waveform = torchaudio.transforms.Resample(sr, self.sample_rate)(waveform)
+            try:
+                import scipy.signal as sps
+
+                num_samples = int(data.shape[0] * float(self.sample_rate) / float(sr))
+                data = sps.resample(data, num_samples, axis=0)
+                sr = self.sample_rate
+            except Exception:
+                warnings.warn(
+                    f"Could not resample file {file_path} from {sr} to {self.sample_rate} Hz. Keeping original sample rate.")
+
+        # Convert to torch tensor with shape (channels, samples)
+        waveform = torch.from_numpy(data.T.copy())
+
+        # (Resampling already handled above on the numpy array.)
         
         # Apply augmentation if enabled
         if self.augment:
