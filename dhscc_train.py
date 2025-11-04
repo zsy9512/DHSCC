@@ -228,6 +228,7 @@ def train(model, train_loader, device, args, test_loader=None):
     }
     
     final_checkpoint = None
+    prev_phase = None
     for epoch in range(args.epochs):
         model.train()
         epoch_loss = 0.0
@@ -258,7 +259,7 @@ def train(model, train_loader, device, args, test_loader=None):
             anneal_ratio = min(1.0, epoch / 20)
             
             # 总损失组成: classification_loss + 0.1 * commit_loss + 0.05 * anneal_ratio * transmit_mse
-            total_loss = classification_loss + 0.1 * commit_loss + 0.05 * anneal_ratio * transmit_mse
+            total_loss = classification_loss + 0.1 * commit_loss + 0.1 * anneal_ratio * transmit_mse
             
             # 检查NaN值
             if torch.isnan(total_loss):
@@ -271,7 +272,10 @@ def train(model, train_loader, device, args, test_loader=None):
 
             loss = total_loss
             
-            # 正常的梯度下降（所有阶段都需要进行梯度下降）
+            # 第二阶段不进行梯度下降
+            # if epoch < args.pretrain_epochs or epoch >= args.selector_epochs:
+            #     loss.backward()
+            #     optimizer.step()
             loss.backward()
             optimizer.step()
             
@@ -331,9 +335,21 @@ def train(model, train_loader, device, args, test_loader=None):
             current_phase = "selector"
         else:
             current_phase = "final"
-        
-        # 记录阶段信息
-        history['phases'].append(current_phase.capitalize())
+
+        # 阶段切换时加载前一阶段最优参数
+        if prev_phase is not None and current_phase != prev_phase:
+            best_path = best_models[prev_phase]['path']
+            if best_path is not None and os.path.exists(best_path):
+                print(f"\n🔄 Loading best {prev_phase} model for {current_phase} phase: {best_path}")
+                checkpoint = torch.load(best_path, map_location=device)
+                model.load_state_dict(checkpoint['model_state_dict'])
+                if 'optimizer_state_dict' in checkpoint:
+                    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                print(f"✓ Loaded best {prev_phase} model weights for {current_phase} phase.")
+            else:
+                print(f"\n⚠️ No best {prev_phase} model found to load for {current_phase} phase.")
+        prev_phase = current_phase
+
         
         # 当前epoch的metrics
         current_metrics = {
@@ -387,8 +403,10 @@ def train(model, train_loader, device, args, test_loader=None):
                 model.adaptive_group_selector.finalize_training()
                 model.adaptive_group_selector.set_inference_mode(True)  # Final阶段使用固定策略
                 print("✓ Adaptive selector finalized and set to inference mode")
-        
-        # 保存最佳模型 (30 epoch后开始保存，每阶段只保存最优)
+            # for param_group in optimizer.param_groups:
+            #     param_group['lr'] = args.lr/100
+            #print(f"✓ Learning rate reset to {param_group['lr']} for final phase")
+            # 保存最佳模型 (30 epoch后开始保存，每阶段只保存最优)
         if epoch >= 30 and test_loader is not None:
             if test_acc > best_models[current_phase]['acc']+0.1:  # 0.1%的精度提升才算新最佳
                 # 更新最佳模型信息

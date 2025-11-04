@@ -52,6 +52,10 @@ def collect_test_data(model, test_loader, device, args):
     # Initialize results storage (simplified structure like test.py)
     results = {}
     
+    class_acc_matrix = []
+    snr_list = []
+    total_infer_time = 0.0
+    snr_count = 0
     for comm_mode in comm_modes:
         print(f"\nTesting Communication Mode {comm_mode}...")
         
@@ -65,13 +69,30 @@ def collect_test_data(model, test_loader, device, args):
             
             # Collect results for this configuration
             config_results = test_single_config(model, test_loader, device, comm_mode, snr, args)
-            
+            if 'inference_time' in config_results:
+                total_infer_time += config_results['inference_time']
+                snr_count += 1            
             # Print results for this SNR
             print(f"SNR: {snr:.2f} dB | Accuracy: {config_results['accuracy']:.2f}% | "
                   f"BER: {config_results['ber']:.6f} | Groups: {config_results['groups_used']:.1f}")
             
             # Store results using SNR as key (similar to test.py structure)
             results[snr] = config_results
+
+            # 收集类别识别率和推理时间
+            if 'class_acc' in config_results:
+                class_acc_matrix.append(config_results['class_acc'])
+                snr_list.append(snr)
+
+    # 保存类别识别率热力图数据
+    if class_acc_matrix:
+        class_acc_matrix = np.stack(class_acc_matrix, axis=0)
+        np.save(os.path.join(args.results_dir, 'class_acc_matrix.npy'), class_acc_matrix)
+        np.save(os.path.join(args.results_dir, 'snr_list.npy'), np.array(snr_list))
+        print(f"Per-class accuracy matrix saved to {args.results_dir}/class_acc_matrix.npy")
+    # 计算平均推理时间
+    avg_infer_time = total_infer_time / snr_count if snr_count > 0 else 0.0
+    print(f"\nAverage inference time across all SNRs: {avg_infer_time:.4f} seconds")
     
     print(f"\nData collection completed!")
     
@@ -113,6 +134,11 @@ def test_single_config(model, test_loader, device, comm_mode, snr, args):
     original_features_batch = []
     attn_weights_batch = []
     
+    # 统计每类识别率
+    num_classes = args.num_classes if hasattr(args, 'num_classes') else 10  # 根据实际类别数调整
+    class_correct = np.zeros(num_classes)
+    class_total = np.zeros(num_classes)
+    
     start_time = time.time()
     
     with torch.no_grad():
@@ -131,7 +157,6 @@ def test_single_config(model, test_loader, device, comm_mode, snr, args):
             # Forward pass - DHSCCNet returns multiple values
             # (classification_output, commit_loss, ber, transmit_mse, zeros_count, group_to_use, debug_info)
             outputs, commit_loss, ber, transmit_mse, zeros_count, group_to_use, debug_info = model(data, args.epochs, snr)
-            
             # Get predictions
             _, predicted = outputs.max(1)
             
@@ -161,6 +186,14 @@ def test_single_config(model, test_loader, device, comm_mode, snr, args):
             if 'attn_weights' in debug_info:
                 attn_weights_batch.append(debug_info['attn_weights'])
             
+            # 统计每类识别率
+            for i in range(target.size(0)):
+                label = target[i].item()
+                pred = predicted[i].item()
+                class_total[label] += 1
+                if label == pred:
+                    class_correct[label] += 1
+            
             # Update progress bar
             current_acc = 100. * correct / total
             pbar.set_postfix({
@@ -175,7 +208,7 @@ def test_single_config(model, test_loader, device, comm_mode, snr, args):
     accuracy = 100. * correct / total
     avg_ber = total_ber / ber_count if ber_count > 0 else 0.0
     avg_groups_used = np.mean(groups_used) if groups_used else 0.0
-    
+    print(f"'inference_time': {inference_time/total}")
     # Combine feature data
     result = {
         'accuracy': accuracy,
@@ -195,6 +228,11 @@ def test_single_config(model, test_loader, device, comm_mode, snr, args):
         result['original_features'] = torch.cat(original_features_batch, dim=0).cpu().numpy()
     if attn_weights_batch:
         result['attn_weights'] = torch.cat(attn_weights_batch, dim=0).cpu().numpy()
+    
+    # 计算每类准确率
+    class_acc = class_correct / np.maximum(class_total, 1)
+    result['class_acc'] = class_acc
+    
     return result
 
 
@@ -398,6 +436,27 @@ class ResultsAnalyzer:
         plt.close()
         print(f"Attention analysis saved to {self.save_dir}/attention_analysis.png")
     
+    def plot_class_acc_heatmap(self):
+        """绘制每个SNR下每个类别的平均识别率热力图"""
+        class_acc_path = os.path.join(self.save_dir, '../class_acc_matrix.npy')
+        snr_path = os.path.join(self.save_dir, '../snr_list.npy')
+        if not os.path.exists(class_acc_path) or not os.path.exists(snr_path):
+            print("No per-class accuracy data found for heatmap.")
+            return
+        class_acc_matrix = np.load(class_acc_path)
+        snr_list = np.load(snr_path)
+        plt.figure(figsize=(10, 6))
+        im = plt.imshow(class_acc_matrix, aspect='auto', cmap='Blues', interpolation='nearest', vmin=0, vmax=1)
+        plt.colorbar(im, label='Accuracy')
+        plt.xlabel('Class Index')
+        plt.ylabel('SNR (dB)')
+        plt.yticks(range(len(snr_list)), [f'{snr:.2f}' for snr in snr_list])
+        plt.title('Per-Class Accuracy Heatmap Across SNR Levels')
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.save_dir, 'class_acc_heatmap.png'), dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"Per-class accuracy heatmap saved to {self.save_dir}/class_acc_heatmap.png")
+    
     def analyze_all(self):
         """执行所有分析"""
         print("\nStarting comprehensive analysis...")
@@ -413,6 +472,10 @@ class ResultsAnalyzer:
         # 3. 绘制注意力权重分析
         print("3. Plotting attention analysis...")
         self.plot_attention_analysis()
+        
+        # 4. 绘制每个类别在不同SNR下的准确率热力图
+        print("4. Plotting per-class accuracy heatmap...")
+        self.plot_class_acc_heatmap()
         
         print(f"\nAll analysis completed. Results saved to {self.save_dir}")
         return True

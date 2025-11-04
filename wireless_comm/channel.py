@@ -56,7 +56,6 @@ class WirelessChannel:
         
         if self.channel_model not in ['awgn', 'rayleigh', 'udp']:
             raise ValueError(f"Unsupported channel model: {channel_model}")
-        
         # UDP channel parameters
         if self.channel_model == 'udp':
             self.udp_tx_host = udp_tx_host
@@ -144,14 +143,18 @@ class WirelessChannel:
             noise_power = bit_energy / ebn0_linear
         else:
             raise ValueError("Either snr_db or ebn0_db must be provided")
-        
         # Generate appropriate noise for complex and real symbols
         if is_complex:
             # Complex signal noise components - each dimension gets half the power
             noise_var_per_dim = noise_power / 2
-            noise_real = torch.randn_like(symbols.real) * np.sqrt(noise_var_per_dim)
-            noise_imag = torch.randn_like(symbols.imag) * np.sqrt(noise_var_per_dim)
+            if not torch.is_tensor(noise_var_per_dim):
+                noise_var_per_dim = torch.tensor(noise_var_per_dim, device=symbols.real.device)
+            else:
+                noise_var_per_dim = noise_var_per_dim.to(symbols.real.device)
+            noise_real = torch.randn_like(symbols.real) * torch.sqrt(noise_var_per_dim)
+            noise_imag = torch.randn_like(symbols.imag) * torch.sqrt(noise_var_per_dim)
             noise = torch.complex(noise_real, noise_imag)
+
         else:
             # Real signal noise components - BPSK uses all noise power for one dimension
             noise = torch.randn_like(symbols) * np.sqrt(noise_power)
@@ -182,13 +185,13 @@ class WirelessChannel:
         """
         # Check if symbols are complex or real
         is_complex = symbols.is_complex()
-        
+        #print(f"Adding Rayleigh fading channel to symbols: {symbols.shape}, is_complex: {is_complex}")
         # Convert real symbols to complex for Rayleigh fading processing
         if not is_complex:
             symbols_complex = torch.complex(symbols, torch.zeros_like(symbols))
         else:
             symbols_complex = symbols
-        
+
         # Generate Rayleigh fading coefficients (complex Gaussian random variables, variance=1)
         h_real = torch.randn_like(symbols_complex.real) / np.sqrt(2)
         h_imag = torch.randn_like(symbols_complex.imag) / np.sqrt(2)
@@ -226,8 +229,14 @@ class WirelessChannel:
         
         # Generate AWGN noise for complex symbols
         noise_var_per_dim = noise_power / 2
-        noise_real = torch.randn_like(faded_symbols.real) * np.sqrt(noise_var_per_dim)
-        noise_imag = torch.randn_like(faded_symbols.imag) * np.sqrt(noise_var_per_dim)
+        # 保证 noise_var_per_dim 是 tensor 并在正确设备
+        if not torch.is_tensor(noise_var_per_dim):
+            noise_var_per_dim = torch.tensor(noise_var_per_dim, device=faded_symbols.device, dtype=faded_symbols.dtype)
+        else:
+            noise_var_per_dim = noise_var_per_dim.to(faded_symbols.device)
+        noise_std = torch.sqrt(noise_var_per_dim.real)  # 保证 noise_std 是实数
+        noise_real = torch.randn_like(faded_symbols.real) * noise_std
+        noise_imag = torch.randn_like(faded_symbols.imag) * noise_std
         noise = torch.complex(noise_real, noise_imag)
         
         # Add noise to faded symbols
@@ -267,6 +276,7 @@ class WirelessChannel:
             return received_symbols, noise_power, None
         
         elif self.channel_model == "rayleigh":
+            #print(f"Applying Rayleigh fading channel to symbols: {symbols.shape}")
             received_symbols, noise_power, h = self.add_rayleigh_channel(
                 symbols, snr_db=snr_db, ebn0_db=ebn0_db,
                 bits_per_symbol=bits_per_symbol, code_rate=code_rate

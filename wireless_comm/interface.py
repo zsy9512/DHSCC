@@ -50,7 +50,7 @@ class WirelessInterface:
                  list_size: int = 8,
                  
                  # Modulation parameters
-                 bits_per_symbol: int = 4,
+                 bits_per_symbol: int = 2,
                  constellation_type: str = "qam",
                  normalize: bool = True,
                  demapping_method: str = "app",
@@ -170,12 +170,13 @@ class WirelessInterface:
         # Multiple coded systems for different payload sizes (adaptive transmission)
         # This matches the original WirelessCodec logic: k = self.k - i*16
         self.adaptive_systems = []
-        for i in range(8):
+        for i in range(13):
             # Calculate adaptive payload size (same as original implementation)
-            adaptive_k = kwargs['k'] - i * 16
-            
+            #adaptive_k = kwargs['k'] - i * 16
+            adaptive_k = 128-  (i+2)* 8
+            print(f"Adaptive polar code system {i}: k={adaptive_k}, n={kwargs['n']}, k={kwargs['k']},, rate={adaptive_k / kwargs['n']:.3f}")
             # Skip if k becomes too small (maintain minimum viable code rate)
-            if adaptive_k < 16:
+            if adaptive_k < 8: #16
                 if kwargs.get('verbose', False):
                     print(f"Skipping adaptive system {i}: k={adaptive_k} too small")
                 continue
@@ -341,7 +342,6 @@ class WirelessInterface:
         """
         if self.comm_mode != 3:
             raise ValueError("transmit_mode3 can only be used with comm_mode=3")
-        
         # Prepare transmission data
         prep_data = self.prepare_transmission_data(indices, bits_per_index, group_to_use)
         binary_data = prep_data['binary_data']
@@ -349,39 +349,19 @@ class WirelessInterface:
         
         # Ensure binary data is on the correct device
         binary_data = binary_data.to(self.device)
-        
+        received_binary= torch.zeros_like(binary_data, device=self.device)
         # Transmit through uncoded system using system_integration
-        try:
-            # Use the system's __call__ method which returns LLRs, noise_var, h
-            llrs, noise_var, h = self.uncoded_system(binary_data, snr_db=snr_db)
-            
-            # Convert LLRs to hard decisions (like mode 4)
-            received_binary = (llrs > 0).float()  # Hard decision: LLR > 0 -> bit = 1
-            
-            # Calculate bit error rate
-            bit_errors = (binary_data != received_binary).sum().float()
-            total_bits = binary_data.numel()
-            ber = bit_errors / total_bits
-            
-            # Transmission successful (removed verbose output)
-            
-        except Exception as e:
-            if self.verbose:
-                print(f"Mode 3 transmission error: {e}")
-            # Fallback: simulate basic AWGN channel
-            noise_power = 10**(-snr_db/10)
-            if isinstance(noise_power, torch.Tensor):
-                noise_power_tensor = noise_power.to(device=binary_data.device, dtype=binary_data.dtype)
-            else:
-                noise_power_tensor = torch.tensor(noise_power, device=binary_data.device, dtype=binary_data.dtype)
-            noise = torch.randn_like(binary_data.float()) * torch.sqrt(noise_power_tensor)
-            received_llrs = binary_data.float() * 2 - 1 + noise  # BPSK-like
-            received_binary = (received_llrs > 0).float()
-            
-            bit_errors = (binary_data != received_binary).sum().float()
-            total_bits = binary_data.numel()
-            ber = bit_errors / total_bits
+        #print("Transmitting using uncoded system... at snr=",snr_db)
+        llrs, noise_var, h = self.uncoded_system(binary_data, snr_db=snr_db)
+        # Convert LLRs to hard decisions (like mode 4)
+        received_binary = (llrs > 0).float()  # Hard decision: LLR > 0 -> bit = 1
         
+        # Calculate bit error rate
+        bit_errors = (binary_data != received_binary).sum().float()
+        total_bits = binary_data.numel()
+        ber = bit_errors / total_bits
+
+
         # Reconstruct indices
         received_indices = self.binary_to_indices(
             received_binary, metadata['original_shape'], bits_per_index
@@ -429,7 +409,8 @@ class WirelessInterface:
         
         # Ensure binary data is on the correct device
         binary_data = binary_data.to(self.device)
-        
+        #print(f"Transmitting {binary_data.shape[1]} bits using {'polar coding' if use_coding else 'uncoded transmission'} at SNR={snr_db} dB")
+        #binary_data = binary_data.flip(-1)  # Flip for polar coding
         if use_coding:
             # Use polar coding transmission
             # Select appropriate coded system based on actual bit count
@@ -466,8 +447,9 @@ class WirelessInterface:
             
             # Transmit through coded system
             try:
-                received_bits, original_bits = system(binary_data, snr_db=snr_db)
                 
+                received_bits, original_bits = system(binary_data, snr_db=snr_db)
+                #received_bits = received_bits.flip(-1)
                 # Calculate bit error rate using the restored original bits
                 bit_errors = (binary_data != received_bits).sum().float()
                 total_bits = binary_data.numel()
@@ -760,8 +742,9 @@ def create_wireless_interface(args) -> WirelessInterface:
     
     interface = WirelessInterface(
         comm_mode=getattr(args, 'communication_mode', 4),  # 使用正确的参数名
-        n=getattr(args, 'N', 256),
-        k=getattr(args, 'k', 128),
+        n=getattr(args, 'polar_n', 128),  # 修正参数名
+        k=getattr(args, 'polar_k', 64),  # 修正参数名
+        #k=getattr(args, 'polar_k', 240),  # 修正参数名
         channel_type=getattr(args, 'channel_type', 'uplink'),
         decoder_type=getattr(args, 'decoder_type', 'SC'),
         list_size=getattr(args, 'list_size', 8),

@@ -37,7 +37,7 @@ class WirelessCommunicationSystem:
                  
                  # Modulation parameters
                  constellation_type: str = "qam",
-                 bits_per_symbol: int = 4,
+                 bits_per_symbol: int = 2,
                  normalize: bool = True,
                  demapping_method: str = "app",
                  
@@ -171,10 +171,9 @@ class WirelessCommunicationSystem:
             raise ValueError("Either ebno_db or snr_db must be provided for simulated channels")
         
         # Transmitter processing
-        if self.use_coding:
-            bits=bits.flip(-1)  # Flip bits for UEP
+        #if self.use_coding:
+             #bits=bits.flip(-1)  # Flip bits for UEP
         encoded_bits, symbols = self.transmitter(bits)
-        
         # Channel processing
         if self.channel_model == 'udp':
             # For UDP channel, work directly with encoded bits
@@ -183,8 +182,9 @@ class WirelessCommunicationSystem:
             
             # For UDP channel, go directly to decoding
             if self.use_coding:
-                #decoded_bits=decoded_bits.flip(-1)
+                
                 decoded_bits = self.receiver.decode_bits(received_bits)
+                decoded_bits=decoded_bits.flip(-1)
                 return decoded_bits, bits  # Return decoded_bits and original for coded systems
             else:
                 # Convert bits to LLR format for consistency with uncoded interface
@@ -192,7 +192,7 @@ class WirelessCommunicationSystem:
                 return llrs, noise_var, channel_info
         else:
             # For simulated channels, use standard processing
-            
+
             received_symbols, noise_var, h = self.channel.apply_channel(
                 symbols,
                 snr_db=snr_db,
@@ -200,13 +200,12 @@ class WirelessCommunicationSystem:
                 bits_per_symbol=self.bits_per_symbol,
                 code_rate=self.code_rate
             )
-            
             # Receiver processing
             llrs, decoded_bits = self.receiver(received_symbols, noise_var, h)
             
             if self.use_coding:
                 # For coded systems, return decoded bits and original bits
-                decoded_bits=decoded_bits.flip(-1)
+                #decoded_bits=decoded_bits.flip(-1)
                 return decoded_bits, bits
             else:
                 # For uncoded systems, return LLRs, noise_var, and channel info

@@ -21,3 +21,34 @@ def set_seed(seed=0):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
     np.random.seed(seed)
+def compute_reliability(sigma, N=128, device='cuda'):
+    """
+    巴氏参数递推法计算极化码信道可靠性，并按可靠性从高到低输出（可靠性=1-巴氏参数）
+    """
+    sigma = torch.tensor(sigma, dtype=torch.float32, device=device) if isinstance(sigma, (int, float)) else sigma
+    if sigma.dim() == 0:
+        Z = torch.zeros(N, device=device)
+        Z[0] = torch.exp(-1 / (2 * sigma ** 2))
+        n = int(np.log2(N))
+        for i in range(n):
+            j = 2 ** i
+            Z_prev = Z.clone()
+            Z[:j] = 2 * Z_prev[:j] - Z_prev[:j] ** 2
+            Z[j:2*j] = Z_prev[:j] ** 2
+        reliability = 1 - Z
+        sorted_reliability, indices = torch.sort(reliability, descending=True)
+        return sorted_reliability, indices
+    else:
+        # batch处理
+        B = sigma.shape[0]
+        Z = torch.zeros(B, N, device=device)
+        Z[:, 0] = torch.exp(-1 / (2 * sigma ** 2))
+        n = int(np.log2(N))
+        for i in range(n):
+            j = 2 ** i
+            Z_prev = Z.clone()
+            Z[:, :j] = 2 * Z_prev[:, :j] - Z_prev[:, :j] ** 2
+            Z[:, j:2*j] = Z_prev[:, :j] ** 2
+        reliability = 1 - Z
+        sorted_reliability, indices = torch.sort(reliability, dim=1, descending=True)
+        return sorted_reliability, indices
