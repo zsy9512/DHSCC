@@ -155,8 +155,8 @@ def test_single_config(model, test_loader, device, comm_mode, snr, args):
                 model.reset_batch_group()
             
             # Forward pass - DHSCCNet returns multiple values
-            # (classification_output, commit_loss, ber, transmit_mse, zeros_count, group_to_use, debug_info)
-            outputs, commit_loss, ber, transmit_mse, zeros_count, group_to_use, debug_info = model(data, args.epochs, snr)
+            # (classification_output, commit_loss, ber, transmit_mse, zeros_count, channel_noise, group_to_use, debug_info)
+            outputs, commit_loss, ber, transmit_mse, zeros_count, channel_noise, group_to_use, debug_info = model(data, args.epochs, snr)
             # Get predictions
             _, predicted = outputs.max(1)
             
@@ -694,7 +694,7 @@ def test(model, test_loader, epoch, snr, device):
                     model.reset_batch_group()
                 
                 # Forward pass
-                outputs, commit_loss, ber, transmit_mse, zeros_count, group_to_use, debug_info = model(data, epoch, snr)
+                outputs, commit_loss, ber, transmit_mse, zeros_count, channel_noise, group_to_use, debug_info = model(data, epoch, snr)
                 
                 # 计算损失 (与训练时相同的损失函数)
                 classification_loss = criterion(outputs, target)

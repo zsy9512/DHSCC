@@ -52,18 +52,18 @@ def create_argument_parser():
     parser.add_argument('--lr_gamma', type=float, default=0.5, help='Learning rate decay factor')
 
     # ==================== 三阶段训练参数 ====================
-    parser.add_argument('--pretrain_epochs', type=int, default=120,
+    parser.add_argument('--pretrain_epochs', type=int, default=80,
                         help='Number of epochs for pretraining phase')
-    parser.add_argument('--selector_epochs', type=int, default=180, 
+    parser.add_argument('--selector_epochs', type=int, default=150, 
                         help='Number of epochs for adaptive selector training phase')
     parser.add_argument('--final_epochs', type=int, default=200,
                         help='Number of epochs for final joint training phase')
     # ==================== 信道参数 (统一使用SNR) ====================
     parser.add_argument('--snr', type=float, default=10.0, 
                         help='Training SNR level (dB)')
-    parser.add_argument('--snr_min', type=float, default=5.0, 
+    parser.add_argument('--snr_min', type=float, default=0.0, 
                         help='Minimum SNR for range testing (dB)')
-    parser.add_argument('--snr_max', type=float, default=15.0, 
+    parser.add_argument('--snr_max', type=float, default=10.0, 
                         help='Maximum SNR for range testing (dB)')
     parser.add_argument('--test_snr_steps', type=int, default=11, 
                         help='Number of SNR steps for testing')
@@ -93,9 +93,9 @@ def create_argument_parser():
                         help='Maximum number of groups available for transmission')
     
     # 信道编码参数
-    parser.add_argument('--N', type=int, default=128,
+    parser.add_argument('--N', type=int, default=256,
                         help='Polar code length (must be power of 2)')
-    parser.add_argument('--K', type=int, default=96,
+    parser.add_argument('--K', type=int, default=128,
                         help='Information bits for polar coding')
     parser.add_argument('--channel_type', type=str, default='uplink',
                         choices=['uplink', 'downlink'],
@@ -126,7 +126,7 @@ def create_argument_parser():
                         help='Fixed number of groups to use (default: None for adaptive selection)')
 
     # ==================== 无线信道模型参数 ====================
-    parser.add_argument('--channel_model', type=str, default='rayleigh',
+    parser.add_argument('--channel_model', type=str, default='awgn',
                         choices=['awgn', 'rayleigh', 'udp'],
                         help='Wireless channel model: awgn, rayleigh, or udp')
     parser.add_argument('--equalization_method', type=str, default='mrc',
@@ -245,7 +245,7 @@ def load_datasets(args):
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=4,
+        num_workers=0,
         pin_memory=True
     )
     
@@ -253,7 +253,7 @@ def load_datasets(args):
         test_dataset,
         batch_size=args.batch_size * 2,
         shuffle=False,
-        num_workers=4,
+        num_workers=0,
         pin_memory=True
     )
     

@@ -339,11 +339,10 @@ class SenderNetwork(nn.Module):
         pre_task_logits = self.pre_classifier(encoded_features.detach())
         
         # Calculate feature importance using joint estimator
-        final_importance, _, _ = self.importance_estimator( encoded_features, pre_task_logits
-        )
+        final_importance, fusion_importance, _ = self.importance_estimator( encoded_features, pre_task_logits, channel_noise=channel_noise)
         
         # Ensure non-zero values for stability
-        importance_weights = torch.clamp(final_importance*channel_noise, min=1e-4)
+        importance_weights = torch.clamp(fusion_importance, min=1e-4)
         #importance_weights = torch.clamp(torch.ones_like(final_importance), min=1e-4)
         # Sort features by importance
         sorted_importance, sort_indices = torch.sort(importance_weights, dim=-1, descending=True)

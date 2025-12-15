@@ -206,7 +206,7 @@ class DHSCCNet(nn.Module):
         }
         
         return (classification_output, torch.mean(commit_loss), 
-                ber, transmit_mse*channel_noise, zeros_count, 
+                ber, transmit_mse, channel_noise, zeros_count, 
                 group_to_use, debug_info)
     
     def reset_batch_group(self):

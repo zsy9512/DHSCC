@@ -2,178 +2,169 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-class CapsuleNetwork(nn.Module):
-    """
-    胶囊网络模块，用于将输入数据分为8组，每组16维
-    """
-    def __init__(self, input_dim, num_groups=8, group_dim=16):
-        super().__init__()
-        self.input_dim = input_dim
-        self.num_groups = num_groups
-        self.group_dim = group_dim
-        self.output_dim = num_groups * group_dim
-        
-        # 输入映射层
-        self.input_projection = nn.Linear(input_dim, self.output_dim)
-        
-        # 胶囊网络层
-        self.primary_capsules = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(group_dim, group_dim),
-                nn.ReLU(),
-                nn.Linear(group_dim, group_dim),
-                nn.LayerNorm(group_dim)
-            ) for _ in range(num_groups)
-        ])
-        
-        # 动态路由参数
-        self.routing_weights = nn.Parameter(torch.randn(num_groups, group_dim, group_dim))
-        
-    def squash(self, tensor):
-        """胶囊激活函数"""
-        squared_norm = (tensor ** 2).sum(dim=-1, keepdim=True)
-        scale = squared_norm / (1 + squared_norm)
-        return scale * tensor / torch.sqrt(squared_norm + 1e-8)
-    
-    def forward(self, x):
-        batch_size = x.size(0)
-        
-        # 投影到目标维度
-        x_proj = self.input_projection(x)  # [batch, num_groups * group_dim]
-        
-        # 重塑为胶囊格式
-        x_grouped = x_proj.view(batch_size, self.num_groups, self.group_dim)
-        
-        # 通过主胶囊层处理每组
-        capsule_outputs = []
-        for i, capsule in enumerate(self.primary_capsules):
-            group_output = capsule(x_grouped[:, i, :])  # [batch, group_dim]
-            capsule_outputs.append(group_output)
-        
-        # 堆叠胶囊输出
-        capsule_features = torch.stack(capsule_outputs, dim=1)  # [batch, num_groups, group_dim]
-        
-        # 应用squash激活
-        capsule_features = self.squash(capsule_features)
-        
-        return capsule_features
-
-
 class JointImportanceEstimator_group(nn.Module):
     """
-    简化的基于胶囊网络分组的联合重要性估计器
+    基于胶囊网络分组的联合重要性估计器 (优化版)
     
-    简化流程：
-    1. 将联合特征 [batch, 257] 直接输入到胶囊网络分8组进行压缩
-    2. 对压缩特征估计出重要性
-    3. 乘上信道条件系数进行加权
-    
-    Args:
-        feature_dim: 特征维度，默认128
-        num_groups: 胶囊网络组数，默认8
-        group_dim: 每组维度，默认16
+    主要改进：
+    1. 移除了未使用的 CapsuleNetwork 类。
+    2. 修正了融合层数值稳定性问题 (避免双重 exp)。
+    3. 增加了参数初始化 (Xavier)。
+    4. 增强了代码的健壮性。
     """
-    def __init__(self, feature_dim=128, num_groups=8, group_dim=16, use_frequency_features=False, num_classes=10, **kwargs):
+    def __init__(self, feature_dim=128, num_groups=8, group_dim=16, 
+                 use_frequency_features=False, num_classes=10, **kwargs):
         super().__init__()
         self.feature_dim = feature_dim
         self.num_groups = num_groups
         self.group_dim = group_dim
-        self.use_frequency_features = use_frequency_features
-        self.num_classes = num_classes
-        # 冗余参数保留，不做使用
-
+        
+        # 维度检查
         assert feature_dim == num_groups * group_dim, \
             f"feature_dim ({feature_dim}) must equal num_groups * group_dim ({num_groups} * {group_dim})"
 
-        # 分组胶囊权重
-        self.W = nn.Parameter(torch.randn(num_groups, group_dim, group_dim))
-        # 自注意力缩放
+        # 1. 胶囊变换权重 [num_groups, group_dim, group_dim]
+        # 相当于对每组特征做一个独立的线性变换
+        self.W = nn.Parameter(torch.Tensor(num_groups, group_dim, group_dim))
+        
+        # 2. 自注意力缩放系数
         self.attn_scale = group_dim ** -0.5
-        # 门控融合MLP
+        
+        # 3. 门控融合 MLP (输入维度为2: p和q)
         self.gate_mlp = nn.Sequential(
-            nn.Linear(2, 8), nn.ReLU(), nn.Linear(8, 1), nn.Sigmoid()
+            nn.Linear(2, 8), 
+            nn.ReLU(), 
+            nn.Linear(8, 1), 
+            nn.Sigmoid()
         )
+        
+        # 执行参数初始化
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        """使用 Xavier 初始化权重，防止梯度异常"""
+        nn.init.xavier_uniform_(self.W)
+        for m in self.gate_mlp:
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
 
     @staticmethod
     def squash(x, dim=-1):
+        """胶囊挤压激活函数：将向量模长压缩至 0-1 之间"""
         norm_sq = (x ** 2).sum(dim=dim, keepdim=True)
         return norm_sq / (1 + norm_sq) * x / (norm_sq.sqrt() + 1e-8)
 
     def dynamic_routing(self, u, num_iter=2):
-        # u: [B, num_groups, group_dim]
+        """
+        组内自路由：计算各组特征与全局上下文的聚合程度
+        u: [B, num_groups, group_dim]
+        """
         B = u.size(0)
-        logits = u.new_zeros(B, self.num_groups)
-        for _ in range(num_iter):
-            c = F.softmax(logits, dim=1).unsqueeze(-1)  # [B, num_groups, 1]
-            v = (c * u).sum(dim=1, keepdim=True)        # [B, 1, group_dim]
+        # Logits 初始化为 0
+        logits = torch.zeros(B, self.num_groups, device=u.device)
+        
+        v = None # 全局上下文向量
+        v_i = None # 加权后的组向量
+
+        for i in range(num_iter):
+            # c: [B, num_groups, 1] - 路由系数 (归一化)
+            c = F.softmax(logits, dim=1).unsqueeze(-1)
+            
+            # v: [B, 1, group_dim] - 全局上下文 (所有组的加权和)
+            v = (c * u).sum(dim=1, keepdim=True)
             v = self.squash(v)
-            agreement = (u * v).sum(dim=-1)             # [B, num_groups]
-            logits = logits + agreement
+            
+            # 最后一次迭代不需要更新 logits，直接计算输出
+            if i < num_iter - 1:
+                # agreement: [B, num_groups] - 组向量与全局上下文的相似度
+                agreement = (u * v).sum(dim=-1)
+                logits = logits + agreement
+        
+        # 最终输出计算
         c = F.softmax(logits, dim=1).unsqueeze(-1)
-        v_i = c * u                                    # [B, num_groups, group_dim]
+        v_i = c * u  # [B, num_groups, group_dim] - 根据全局一致性重加权的特征
         return v_i, v
 
     def self_attention(self, v_i):
-        # v_i: [B, num_groups, group_dim]
-        attn_score = torch.einsum('bnd,bmd->bnm', v_i, v_i) * self.attn_scale
-        attn = F.softmax(attn_score, dim=-1)           # [B, num_groups, num_groups]
-        v_hat = torch.einsum('bnm,bmd->bnd', attn, v_i)
+        """
+        组间自注意力：捕捉组与组之间的相关性
+        v_i: [B, num_groups, group_dim]
+        """
+        # 计算注意力分数: [B, num_groups, num_groups]
+        scores = torch.einsum('bnd,bmd->bnm', v_i, v_i) * self.attn_scale
+        attn_weights = F.softmax(scores, dim=-1)
+        
+        # 聚合特征
+        v_hat = torch.einsum('bnm,bmd->bnd', attn_weights, v_i)
         return v_hat
 
     def expand_group_importance_to_feature_dim(self, group_importance):
+        """将组重要性扩展回原始特征维度"""
         batch_size = group_importance.size(0)
-        expanded_importance = group_importance.unsqueeze(-1).repeat(1, 1, self.group_dim)
-        feature_importance = expanded_importance.view(batch_size, self.feature_dim)
-        return feature_importance
+        # [B, num_groups] -> [B, num_groups, 1] -> [B, num_groups, group_dim]
+        expanded = group_importance.unsqueeze(-1).expand(-1, -1, self.group_dim)
+        # [B, feature_dim]
+        return expanded.reshape(batch_size, self.feature_dim)
 
     def forward(self, features, channel_importance=None, channel_noise=None, use_channel_guided=True):
         """
-        新流程：
-        1. 特征分组，映射为初级胶囊
-        2. 两次动态路由得到组胶囊
-        3. 自注意力融合
-        4. 范数融合加权，softmax归一化
-        5. 新方案：融合信道可靠性（如巴氏参数）和信道噪声，指导特征重要性生成
+        Args:
+            features: [B, feature_dim]
+            channel_noise: 标量或张量，表示信道噪声水平 (值越大噪声越大)
         """
         B = features.size(0)
-        h = features.view(B, self.num_groups, self.group_dim)  # [B, num_groups, group_dim]
-        # 初级胶囊
-        u = torch.einsum('bnd,ndh->bnh', h, self.W)            # [B, num_groups, group_dim]
+        
+        # 1. 变换与初级胶囊
+        # [B, feature_dim] -> [B, num_groups, group_dim]
+        h = features.view(B, self.num_groups, self.group_dim)
+        # 线性变换: [B, n, d] * [n, d, d] -> [B, n, d]
+        u = torch.einsum('bnd,ndh->bnh', h, self.W)
         u = self.squash(u)
-        # 两次动态路由
-        v_i, v_global = self.dynamic_routing(u, num_iter=2)
-        # 自注意力
+        
+        # 2. 动态路由 (提取全局一致性特征)
+        v_i, _ = self.dynamic_routing(u, num_iter=2)
+        
+        # 3. 自注意力 (提取组间关联特征)
         v_hat = self.self_attention(v_i)
-        # 范数（存在概率）
-        p = v_i.norm(dim=-1)                                  # [B, num_groups]
-        q = v_hat.norm(dim=-1)                                # [B, num_groups]
-        # 门控融合
-        gate = self.gate_mlp(torch.stack([p, q], dim=-1)).squeeze(-1)  # [B, num_groups]
-        alpha_logits = gate * p + (1 - gate) * q
-        alpha = F.softmax(alpha_logits, dim=1)                # [B, num_groups]
+        
+        # 4. 计算模长 (作为“存在概率”或“信息量”)
+        p = v_i.norm(dim=-1)   # [B, num_groups] (路由分支)
+        q = v_hat.norm(dim=-1) # [B, num_groups] (注意力分支)
+        
+        # 5. 门控融合
+        # gate: [B, num_groups] (0~1)
+        gate_input = torch.stack([p, q], dim=-1) # [B, num_groups, 2]
+        gate = self.gate_mlp(gate_input).squeeze(-1) 
+        
+        # 融合后的 Logits (未经过 Softmax)
+        alpha_logits = gate * p + (1 - gate) * q 
+        
+        # 基础重要性 (归一化)
+        alpha = F.softmax(alpha_logits, dim=1)
         final_importance = self.expand_group_importance_to_feature_dim(alpha)
-        # --- 新方法：信道可靠性引导融合 ---
+        
+        # 6. 信道感知融合 (New Scheme)
         fusion_importance = None
-        if use_channel_guided and channel_importance is not None and channel_noise is not None:
-            # channel_importance: [B, feature_dim] 或 [1, feature_dim] 或 [feature_dim]W
-            # 自动扩展到batch维度
-            if channel_importance.dim() == 1 and channel_importance.size(0) == self.feature_dim:
-                channel_importance = channel_importance.unsqueeze(0).expand(B, -1)
-            elif channel_importance.dim() == 2 and channel_importance.size(0) == 1 and channel_importance.size(1) == self.feature_dim:
-                channel_importance = channel_importance.expand(B, -1)
-            elif channel_importance.dim() == 2 and channel_importance.size(0) == B and channel_importance.size(1) == self.feature_dim:
-                pass  # already correct
-            else:
-                raise RuntimeError(f"channel_importance shape {channel_importance.shape} does not match [B, feature_dim]")
-            #极化码的复杂度太高，弃用
-            channel_group = channel_importance.view(B, self.num_groups, self.group_dim).mean(dim=-1)
-            fusion_logits = torch.exp(alpha_logits)/(torch.exp(-channel_noise)+1e-6)
+        
+        if use_channel_guided and channel_noise is not None:
+            #print(channel_noise)
+            # 处理 channel_noise 维度，确保它是 [B, 1] 或 [1]
+            if isinstance(channel_noise, float):
+                channel_noise = torch.tensor(channel_noise, device=features.device)
+            channel_noise = channel_noise.view(1, 1)
             
-            fusion_alpha = F.softmax(fusion_logits,dim=1)  # [B, num_groups]
-            # 稀疏性门控：噪声越大，稀疏性越强（用exp(-noise)缩放softmax温度）
-            fusion_importance = self.expand_group_importance_to_feature_dim(fusion_alpha)# [B, num_groups]
-            #print("fusion_importance shape:", fusion_importance)
-        # 返回三种重要性估计，便于解耦评估
-        return final_importance, fusion_importance, channel_importance
+            # 温度系数计算：噪声越大 -> exp(-noise)越小 -> 温度越低 -> 分布越尖锐(稀疏)
+            # 温度系数 T = exp(-noise) + epsilon
+            temperature = torch.exp(channel_noise) + 1e-6
+            
+            # --- 关键修正 ---
+            # 直接缩放 Logits，而不是对 exp(logits) 再做除法
+            # 这样避免了数值溢出，且物理意义更明确：High Noise = Low Temperature = Sharp Softmax
+            fusion_logits = alpha_logits * temperature
+            
+            fusion_alpha = F.softmax(fusion_logits, dim=1) # [B, num_groups]
+            fusion_importance = self.expand_group_importance_to_feature_dim(fusion_alpha)
 
+        return final_importance, fusion_importance, None

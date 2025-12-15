@@ -170,10 +170,9 @@ class WirelessInterface:
         # Multiple coded systems for different payload sizes (adaptive transmission)
         # This matches the original WirelessCodec logic: k = self.k - i*16
         self.adaptive_systems = []
-        for i in range(13):
+        for i in range(7):
             # Calculate adaptive payload size (same as original implementation)
-            #adaptive_k = kwargs['k'] - i * 16
-            adaptive_k = 128-  (i+2)* 8
+            adaptive_k = kwargs['k'] - i * 16
             print(f"Adaptive polar code system {i}: k={adaptive_k}, n={kwargs['n']}, k={kwargs['k']},, rate={adaptive_k / kwargs['n']:.3f}")
             # Skip if k becomes too small (maintain minimum viable code rate)
             if adaptive_k < 8: #16
@@ -742,8 +741,8 @@ def create_wireless_interface(args) -> WirelessInterface:
     
     interface = WirelessInterface(
         comm_mode=getattr(args, 'communication_mode', 4),  # 使用正确的参数名
-        n=getattr(args, 'polar_n', 128),  # 修正参数名
-        k=getattr(args, 'polar_k', 64),  # 修正参数名
+        n=getattr(args, 'polar_n', 256),  # 修正参数名
+        k=getattr(args, 'polar_k', 128),  # 修正参数名
         #k=getattr(args, 'polar_k', 240),  # 修正参数名
         channel_type=getattr(args, 'channel_type', 'uplink'),
         decoder_type=getattr(args, 'decoder_type', 'SC'),

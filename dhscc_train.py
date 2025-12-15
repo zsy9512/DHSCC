@@ -247,10 +247,10 @@ def train(model, train_loader, device, args, test_loader=None):
             # 每个新batch开始时重置group选择（确保同一batch内使用相同group）
             if hasattr(model, 'reset_batch_group'):
                 model.reset_batch_group()
-            
-            # Forward: outputs, commit_loss, ber, transmit_mse, zeros_count, group_to_use, debug_info
-            outputs, commit_loss, ber, transmit_mse, zeros_count, group_to_use, debug_info = model(data, epoch, args.snr)
-            
+
+            # Forward: outputs, commit_loss, ber, transmit_mse, zeros_count, channel_noise, group_to_use, debug_info
+            outputs, commit_loss, ber, transmit_mse, zeros_count, channel_noise, group_to_use, debug_info = model(data, epoch, args.snr)
+            eta = (1 - 2 * torch.log10(torch.Tensor([channel_noise],device="cpu") + 1e-6)) .to(device)
             # 分类损失 - CrossEntropyLoss
             criterion = nn.CrossEntropyLoss()
             classification_loss = criterion(outputs, target)
@@ -259,8 +259,8 @@ def train(model, train_loader, device, args, test_loader=None):
             anneal_ratio = min(1.0, epoch / 20)
             
             # 总损失组成: classification_loss + 0.1 * commit_loss + 0.05 * anneal_ratio * transmit_mse
-            total_loss = classification_loss + 0.1 * commit_loss + 0.1 * anneal_ratio * transmit_mse
-            
+            total_loss = eta * classification_loss + 0.1 * eta *  commit_loss + 0.1 * anneal_ratio * transmit_mse*eta
+           
             # 检查NaN值
             if torch.isnan(total_loss):
                 print(f"NaN detected in loss at epoch {epoch}, batch {batch_idx}")
