@@ -1,5 +1,9 @@
 # DHSCC: Deep Hybrid Semantic-Channel Coding
 
+本代码库 **DHSCC (Deep Hybrid Semantic-Channel Coding)** 是以下论文的代码实现/配套代码：
+
+Shengyu Zhang, Qi Zhang, Liuchang Yang, Yan Wang, and Tao Jiang. **Group-Level Feature-Aware Hybrid Coding for Adaptive Task-Oriented Tactile Communication**. *IEEE Transactions on Cognitive Communications and Networking*, 2026, 12: 9460–9473.
+
 ## 概述
 
 DHSCC (Deep Hybrid Semantic-Channel Coding) 是一个深度学习框架，用于振动信号分类任务中的语义-信道混合编码。该系统通过端到端的训练策略，实现了在无线信道条件下的高效特征传输和分类性能优化。
@@ -190,3 +194,16 @@ python dhscc_main.py --mode test \
 
 如有问题，请通过issue或email联系开发团队。
 shenguyu@hust.edu.cn
+
+
+如果您在研究工作中使用本代码库、复现本文实验或基于本文方法进行开发，请引用上述论文。推荐使用以下 BibTeX：
+
+```bibtex
+@article{zhang2026group,
+  author  = {Zhang, Shengyu and Zhang, Qi and Yang, Liuchang and Wang, Yan and Jiang, Tao},
+  title   = {Group-Level Feature-Aware Hybrid Coding for Adaptive Task-Oriented Tactile Communication},
+  journal = {IEEE Transactions on Cognitive Communications and Networking},
+  year    = {2026},
+  volume  = {12},
+  pages   = {9460--9473}
+}
